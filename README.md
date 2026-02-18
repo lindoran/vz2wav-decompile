@@ -1,100 +1,110 @@
-# VZ to WAV Converter
+# VZ2WAV / WAV2VZ Reconstruction Project
 
-A clean, modern rewrite of a VZ tape format to WAV audio converter.
+This project began by disassembling the original **VZ2WAV.EXE** and using **Reko** to generate a decompiled version. With both the disassembly and decompiled output — plus known-good input/output files from the DOS utility — it became possible to “clean room” reconstruct the 16‑bit EXE.
 
-## About
+The LLM was provided:
 
-This tool converts VZ tape format files (.vz) (used by VTech VZ200/VZ300 computers) into WAV audio files that can be played back to load programs on original hardware or emulators.
+- Decompiled C-like output from Reko  
+- A full disassembly of the original EXE  
+- Sample input and output WAV files  
+- The `text2basic` source code to help identify `.vz` file structure  
 
-The code is a complete rewrite of decompiled Borland C DOS code, modernized for Linux/Unix systems.
+Using these, we were able to rediscover the `.vz` file format and the exact output characteristics of the original DOS tool.
 
-## Building
+## Findings
 
-Simple compilation:
-```bash
-make
-```
+We discovered **two bugs** in the original Borland C code. Both were caused by **uninitialized stack values** being used in place of proper data. After correcting these, we were able to reproduce **byte‑accurate output** from the original DOS program.
 
-Or manually:
-```bash
-gcc -Wall -O2 -o vz2wav vz2wav.c
-```
+For compatibility testing, command‑line flags were added to intentionally reproduce the original malformed behavior. These should not be needed for normal use, but they allow exact byte‑for‑byte reproduction of the DOS output.
 
-## Installation
-
-```bash
-sudo make install
-```
-
-This installs the binary to `/usr/local/bin/`.
+---
 
 ## Usage
 
-```bash
-./vz2wav input.vz output.wav
-```
+vz2wav [--compat] [--artifact] <input.vz> <output.wav>
 
-Example:
-```bash
-./vz2wav game.vz game.wav
-```
+### `--compat`
+Produce a **malformed WAV file** that matches the DOS original exactly.  
+The RIFF and data chunk size fields are set to the raw DOS stack garbage values:
 
-## How It Works
+- `0x00146e0c`
+- `0x01140000`
 
-The converter:
+The DOS program never rewound the file to fix these. Most WAV players tolerate this.  
+Omit `--compat` for a standards‑compliant WAV file with correct size fields.
 
-1. **Reads the VZ file** - Skips the 24-byte VZ header and reads the data
-2. **Creates a WAV file** with:
-   - 22050 Hz sample rate
-   - 8-bit mono PCM
-   - Proper WAV header
-3. **Encodes the data** using VZ tape format:
-   - Initial silence (1 second)
-   - Preamble sync bytes (255 × 0x80, 5 × 0xFF)
-   - Filename from VZ header
-   - Data length (4 bytes)
-   - Actual program data
-   - Checksum (2 bytes)
-   - Trailing silence (1 second)
+### `--artifact`
+Write the exact **80‑byte uninitialized Borland C stack pattern** into the padding gap between the filename and address block, instead of `80 × 0x7F`.
 
-Each byte is converted to 8 bits (MSB first), and each bit is represented by a specific audio waveform:
-- **Bit 0**: 19 low samples, 19 high samples (longer wavelength)
-- **Bit 1**: 9 low, 10 high, 10 low, 9 high (two shorter wavelengths)
+This matches the padding bytes found in the DOS output byte‑for‑byte.  
+The VZ hardware treats both identically (both are below the comparator threshold).  
+Can be combined with `--compat`.
 
-## Technical Details
+---
 
-### VZ Tape Format
+## Current Status
 
-- Each bit is encoded as a specific waveform pattern (38 samples)
-- Bit 0: Single long wave cycle
-- Bit 1: Two shorter wave cycles
-- Bytes are transmitted MSB first
-- Includes preamble, data length, checksum
+`wav2vz` is still broken. The program produces output that the DOS `wav2vz_2.exe` can convert back, but both tools report an error even though they still build a `.vz` file. This suggests the issue may be:
 
-### WAV Format
+- A misunderstanding of how the VZ expects WAV files  
+- A flaw in the original `wav2vz` logic  
+- A remaining issue in the cleaned‑up `vz2wav` output  
 
-- 8-bit unsigned PCM (128 = silence)
-- Mono channel
-- 22050 Hz sample rate
-- Standard RIFF WAV header
+Because it is so broken, the source has been temporarily removed until it can be fixed.
 
-## Differences from Original
+`text2bas` works correctly, but it is not as robust as the version at:
 
-This rewrite:
-- ✅ Clean, readable, well-commented code
-- ✅ Standard C99 (not Borland C)
-- ✅ No DOS dependencies
-- ✅ Proper error handling
-- ✅ Memory safety
-- ✅ Progress indication
-- ✅ Works on modern Linux/Unix systems
-- ✅ Fix some encoding bugs present in orignal tool
+https://github.com/rweather/vz200-restoration/tree/main/src/bas2vz
 
-## License
+---
 
-This is a clean-room rewrite based on reverse-engineered functionality.
-Use freely for educational and preservation purposes.
+## Portability and Datatype Fixes
 
-## Author
+The code has been updated to use **MinGW‑safe datatypes**. This was necessary because:
 
-Rewritten from decompiled Borland C source code (circa 1990s).
+- The original DOS file used 16‑bit (or possibly 32‑bit) `long` types  
+- Linux GCC uses **64‑bit** `long` types  
+- Borland C treats `char` as **unsigned**, while GCC treats it as **signed**  
+
+We capped integer sizes to **32 bits** and used explicit datatypes to ensure consistent behavior. More testing is needed, but this should work across compilers.
+
+This should also compile under **TCC**, which opens the possibility of producing a version that runs under **16‑bit DOS** again — not especially useful unless you have piles of `.vz` files on a DOS machine, but technically possible.
+
+---
+
+## TODO
+
+### Build System
+- Fix the build chain so it works cleanly with MinGW  
+- Update the Makefile to produce Windows `.exe` files directly from Linux or Windows  
+
+### WAV2VZ
+- Decompile `WAV2VZ_2.EXE`  
+- Understand how it accepts nearly any input  
+- Determine why the cleaned‑up output triggers an error even though it still converts  
+
+### Swiss‑Army Front End
+Create a unified tool that accepts a file and produces multiple output formats:
+
+- `.bas`  
+- `.vz`  
+- `.cas`  
+- `.bin`  
+- `.hex`  
+- `.srec`  
+
+Add options for:
+
+- Waveform inversion  
+- Input filtering (like many Windows tools)  
+- Square‑wave output patterns  
+
+Modern sound cards don’t care much about waveform shape, but square waves may help with emulator loading or converting actual sampled audio from the VZ.
+
+### Long‑Term Goals
+- Fully document the **VZ200 BASIC ROM**  
+- Reverse‑engineer the tape routines  
+- Build a **fast loader**  
+- Produce fast‑load output similar to the ZX Spectrum or the “2018AD” loader  
+
+This may require repacking data and designing a custom loader, but it is entirely achievable.

@@ -8,9 +8,6 @@ all: $(TARGETS)
 vz2wav: vz2wav.c
 	$(CC) $(CFLAGS) -o vz2wav vz2wav.c $(LDFLAGS)
 
-wav2vz: wav2vz.c
-	$(CC) $(CFLAGS) -o wav2vz wav2vz.c $(LDFLAGS)
-
 text2bas-vz: text2bas.c
 	$(CC) $(CFLAGS) -DCGENIE=0 -o text2bas-vz text2bas.c
 
