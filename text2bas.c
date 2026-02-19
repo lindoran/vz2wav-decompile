@@ -419,7 +419,13 @@ int main(int ac, char **av)
             }
         }
     }
-
+    /* If the last line had content but no newline, flush it */
+    if (line.next > 0)
+    {
+        outbyte(out, 0x00);
+        outline(out);
+    }
+    
     /* Write end marker */
     line.next = 0;
     fwrite(&line, 1, 2, out);

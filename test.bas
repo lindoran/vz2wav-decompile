@@ -1,1 +1,1 @@
-10 PRINT "HELLO, WORLD!"
+10 PRINT "Hello, World!"
