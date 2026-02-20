@@ -1,3 +1,4 @@
+<pre>
 VZ2WAV / WAV2VZ RECONSTRUCTION PROJECT
 ======================================
 
@@ -157,3 +158,4 @@ Unless stated otherwise:
 
     Code here is public domain, as-is, and used at your own risk as of
     2026. No liability is implied.
+</pre>
