@@ -1,0 +1,26 @@
+text2bas.c(83): Warning! W131: No prototype found for function 'strncasecmp'
+text2bas.c(303): Error! E1077: Missing '}'
+text2bas.c(303): Warning! W107: Missing return value for function 'main'
+text2bas.c(304): Error! E1009: Expecting ')' but found '0'
+text2bas.c(304): Error! E1062: Inconsistent return type for function 'memset'
+text2bas.c(304): Note! I2003: source conversion type is 'int'
+text2bas.c(304): Note! I2004: target conversion type is 'void *'
+text2bas.c(304): Note! I2002: 'memset' defined in: /opt/watcom/h/string.h(126)
+text2bas.c(304): Error! E1026: Invalid declarator
+text2bas.c(304): Error! E1009: Expecting ',' but found '0'
+text2bas.c(304): Error! E1026: Invalid declarator
+text2bas.c(304): Error! E1026: Invalid declarator
+text2bas.c(304): Error! E1009: Expecting ',' but found 'sizeof'
+text2bas.c(304): Error! E1009: Expecting ',' but found ')'
+text2bas.c(304): Error! E1026: Invalid declarator
+text2bas.c(305): Error! E1022: Missing or misspelled data type near 'strncpy'
+text2bas.c(305): Error! E1009: Expecting ')' but found '16'
+text2bas.c(305): Error! E1024: Declared symbol 'strncpy' is not in parameter list
+text2bas.c(305): Error! E1009: Expecting ',' but found '16'
+text2bas.c(305): Error! E1026: Invalid declarator
+text2bas.c(305): Error! E1009: Expecting ',' but found ')'
+text2bas.c(305): Error! E1026: Invalid declarator
+text2bas.c(306): Error! E1022: Missing or misspelled data type near 'basename'
+text2bas.c(306): Error! E1025: Parameter 'basename' already declared
+text2bas.c(306): Error! E1009: Expecting ',' but found '='
+text2bas.c(306): Error! E1147: Too many errors: compilation aborted
