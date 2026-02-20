@@ -43,7 +43,7 @@ USAGE
 -----
 
 vz2wav:
-    vz2wav [--compat] [--artifact] <input.vz> <output.wav>
+    vz2wav [--compat] [--artifact] input.vz output.wav
 
     --compat
         Produce a malformed WAV file that matches the DOS original
@@ -63,14 +63,14 @@ vz2wav:
         identically. Can be combined with --compat.
 
 wav2vz:
-    wav2vz <input.wav> <output.vz>
+    wav2vz input.wav output.vz
 
 text2bas:
     Juergen Buchmueller's Text To BASic converter as found on Bushy's VZ200 Files Site:
     http://www.vz200.org/bushy/software.html - ported to gcc and console from Atari-ST
 
-    text2bas-vz <input.txt> {output.vz}
-    text2bas-cg <input.txt> {output.cas}
+    text2bas-vz input.txt {output.vz}
+    text2bas-cg input.txt {output.cas}
     If no output filename is given, the program generates one.
 
 text2bas works correctly, but it is not as robust as the version at:
