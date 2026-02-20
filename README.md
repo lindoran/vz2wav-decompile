@@ -78,14 +78,6 @@ We capped integer sizes to **32 bits** and used explicit datatypes to ensure con
 
 ## TODO
 
-### Build System
-- Fix the build chain so it works cleanly with MinGW
-- Update the Makefile to produce Windows `.exe` files directly from Linux or Windows
-
-### WAV2VZ
-- Decompile `WAV2VZ_2.EXE`
-- Understand how it accepts nearly any input
-- Determine why the cleaned‑up output triggers an error even though it still converts
 
 ### Swiss‑Army Front End
 Create a unified tool that accepts a file and produces multiple output formats:
