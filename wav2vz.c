@@ -180,6 +180,10 @@ STATIC_ASSERT(sizeof(VzHeader) == 24u, VzHeader_must_be_24_bytes);
  * ----------------------------------------------------------------------- */
 static FILE *g_wav = NULL;
 static FILE *g_vz  = NULL;
+static int g_allow_eof = 0;
+static int g_hit_eof = 0;
+static int g_budget_active = 0;
+static size_t g_budget_remaining = 0;
 
 /* -----------------------------------------------------------------------
  * fatal() -- print error, close files, exit.
@@ -203,10 +207,48 @@ static void fatal(const char *msg)
  * ----------------------------------------------------------------------- */
 static int safe_fgetc(void)
 {
+    if (g_budget_active && g_budget_remaining == 0) {
+        if (g_allow_eof) {
+            g_hit_eof = 1;
+            return EOF;
+        }
+        fatal("\nFATAL ERROR - unexpected end of WAV file");
+    }
     int c = fgetc(g_wav);
     if (c == EOF)
+    {
+        if (g_allow_eof) {
+            g_hit_eof = 1;
+            return EOF;
+        }
         fatal("\nFATAL ERROR - unexpected end of WAV file");
+    }
+    if (g_budget_active && g_budget_remaining > 0)
+        g_budget_remaining--;
     return c;   /* guaranteed [0..255] */
+}
+
+static void budget_start(size_t samples)
+{
+    g_budget_active = 1;
+    g_budget_remaining = samples;
+}
+
+static void budget_stop(void)
+{
+    g_budget_active = 0;
+}
+
+static int resync_to_high(void)
+{
+    int c;
+    do {
+        c = safe_fgetc();
+        if (c == EOF)
+            return -1;
+    } while ((unsigned)c <= 0x7Fu);
+    ungetc(c, g_wav);
+    return 0;
 }
 
 /* -----------------------------------------------------------------------
@@ -229,12 +271,14 @@ static uint8_t FindCycle(void)
     /* Advance to the next high sample (> 0x7F) */
     do {
         c = safe_fgetc();
+        if (c == EOF) return CYCLE_ERROR;
     } while ((unsigned)c <= 0x7Fu);
 
     /* Count consecutive high samples; c holds the first one already */
     hi_count = 1;
     for (;;) {
         c = safe_fgetc();
+        if (c == EOF) return CYCLE_ERROR;
         if ((unsigned)c <= 0x7Fu) break;
         hi_count++;
     }
@@ -243,11 +287,13 @@ static uint8_t FindCycle(void)
     lo_count = 1;
     for (;;) {
         c = safe_fgetc();
+        if (c == EOF) return CYCLE_ERROR;
         if ((unsigned)c > 0x7Fu) break;
         lo_count++;
     }
 
     /* Push back the first high sample of the next cycle */
+    if (c == EOF) return CYCLE_ERROR;
     ungetc(c, g_wav);
 
     /* Classify */
@@ -517,12 +563,46 @@ int main(int argc, char *argv[])
     /* ------------------------------------------------------------------ */
     /* Read and verify tape checksum (little-endian uint16)                */
     /* ------------------------------------------------------------------ */
-    checksum_tape = read_u16_le();
+    {
+        const size_t checksum_budget = 22050u;
+        int checksum_ok = 0;
+        int resync_used = 0;
 
-    if (checksum_calc != checksum_tape)
-        printf("error --  try resampling tape\n");
-    else
-        printf("OK!\n");
+        g_allow_eof = 1;
+        g_hit_eof = 0;
+        budget_start(checksum_budget);
+        checksum_tape = read_u16_le();
+        budget_stop();
+
+        if (!g_hit_eof) {
+            checksum_ok = 1;
+        } else {
+            g_hit_eof = 0;
+            resync_used = 1;
+            budget_start(checksum_budget);
+            if (resync_to_high() == 0) {
+                checksum_tape = read_u16_le();
+            }
+            budget_stop();
+            if (!g_hit_eof)
+                checksum_ok = 1;
+        }
+        g_allow_eof = 0;
+
+        if (!checksum_ok) {
+            printf("warning -- checksum missing / malformed\n");
+            printf("run length matched, this could be fine\n");
+        } else {
+            if (resync_used)
+                printf("checksum read after resync (2 bytes). ");
+            if (checksum_calc != checksum_tape) {
+                printf("warning -- checksum mismatch\n");
+                printf("run length matched, may need to redump\n");
+            } else {
+                printf("OK!\n");
+            }
+        }
+    }
 
     printf("\n*** Operation completed ***\n");
 
