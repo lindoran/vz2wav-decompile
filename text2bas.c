@@ -4,7 +4,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
+
+#if defined(_WIN32) && !defined(strncasecmp)
+#define strncasecmp _strnicmp
+#endif
 
 /* set to 1 for Colour Genie tokenizer, 0 for VZ200/300 */
 #ifndef CGENIE
@@ -289,7 +294,7 @@ int main(int ac, char **av)
         p = inpfilename - 1;
     fputc(0x66, out);
     /* Basic name is first char of filename */
-    fputc(toupper(p[1]), out);
+    fputc(toupper((unsigned char)p[1]), out);
 #else
     /* VZ magic header */
     fwrite("VZF0", 1, 4, out);
@@ -301,9 +306,12 @@ int main(int ac, char **av)
         p = inpfilename;
     
     char basename[18];
+    size_t copy_len = strlen(p);
+    if (copy_len > 16)
+        copy_len = 16;
     memset(basename, 0, sizeof(basename));
-    strncpy(basename, p, 16);  /* Leave room for null terminator */
-    basename[16] = '\0';  /* Ensure null termination */
+    memcpy(basename, p, copy_len);
+    basename[copy_len] = '\0';
     
     /* Convert to uppercase and truncate at extension */
     for (int i = 0; i < 17 && basename[i]; i++)
@@ -313,7 +321,7 @@ int main(int ac, char **av)
             basename[i] = 0;
             break;
         }
-        basename[i] = toupper(basename[i]);
+        basename[i] = toupper((unsigned char)basename[i]);
     }
     fwrite(basename, 1, 17, out);
     
@@ -356,7 +364,7 @@ int main(int ac, char **av)
                 outbyte(out, c);
 #else
                 /* upper case letters only */
-                outbyte(out, toupper(c));
+                outbyte(out, toupper((unsigned char)c));
 #endif
             }
             if (c == str)  /* end of string/comment ? */
@@ -413,7 +421,7 @@ int main(int ac, char **av)
 #if CGENIE
                 outbyte(out, c);
 #else
-                outbyte(out, toupper(c));
+                outbyte(out, toupper((unsigned char)c));
 #endif
                 break;
             }
