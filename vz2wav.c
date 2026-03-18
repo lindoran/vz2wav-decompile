@@ -6,7 +6,7 @@
  * output produced by the original DOS application.
  *
  * Usage:
- *   vz2wav [--compat] [--artifact] <input.vz> <output.wav>
+ *   vz2wav [--compat] [--artifact] [--robust] [--gain <percent>] <input.vz> <output.wav>
  *
  *   --compat    Produce a "malformed" WAV file that matches the DOS original
  *               exactly: the RIFF and data chunk size fields are set to the
@@ -21,6 +21,13 @@
  *               in the known-good DOS binary output byte-for-byte.  The VZ
  *               hardware treats both identically (both are below the comparator
  *               threshold).  Can be combined with --compat.
+ *
+ *   --robust    Emit a more tolerant waveform envelope for real-world analog
+ *               paths (longer settle time, leader, and sync burst). This is
+ *               intended for noisy line-in/line-out chains.
+ *
+ *   --gain      Signed percent delta applied around 0x7F center.
+ *               Example: --gain 10 => 110% amplitude, --gain -10 => 90%.
  *
  * Build (Linux / GCC):
  *   gcc -Wall -o vz2wav vz2wav.c
@@ -50,6 +57,17 @@
 #define VZ_HEADER_SIZE      24
 #define FILENAME_FIELD_LEN  16
 #define SAMPLES_PER_BIT     38
+#define POST_CKSUM_GUARD    0x00
+#define ROBUST_PRE_SILENCE_SAMPLES  ((uint32_t)SAMPLE_RATE * 2u)
+#define ROBUST_POST_SILENCE_SAMPLES ((uint32_t)SAMPLE_RATE * 2u)
+#define ROBUST_LEADER_COUNT         384
+#define ROBUST_SYNC_COUNT           SYNC_COUNT
+#define SIGNAL_CENTER               127
+#define DEFAULT_GAIN_PERCENT        10
+#define MIN_GAIN_PERCENT           -90
+#define MAX_GAIN_PERCENT           300
+
+static int g_output_gain_percent = DEFAULT_GAIN_PERCENT;
 
 /* -------------------------------------------------------------------------
  * Bit waveform tables  (exact values from the DOS binary)
@@ -135,8 +153,34 @@ static void build_wav_header(unsigned char hdr[44], uint32_t data_bytes, int com
 
 static int write_bit(FILE *out, int bit)
 {
-    size_t n = fwrite(bit ? BIT1_WAVE : BIT0_WAVE, 1, SAMPLES_PER_BIT, out);
-    return (n == (size_t)SAMPLES_PER_BIT) ? 0 : -1;
+    int i;
+    const unsigned char *src = bit ? BIT1_WAVE : BIT0_WAVE;
+    int gain_num = 100 + g_output_gain_percent;
+
+    for (i = 0; i < SAMPLES_PER_BIT; i++) {
+        int centered = (int)src[i] - SIGNAL_CENTER;
+        int scaled = SIGNAL_CENTER + (centered * gain_num) / 100;
+        if (scaled < 0) scaled = 0;
+        if (scaled > 255) scaled = 255;
+        if (fputc((unsigned char)scaled, out) == EOF)
+            return -1;
+    }
+    return 0;
+}
+
+static int parse_gain_percent(const char *s, int *out)
+{
+    char *end = NULL;
+    long v;
+    if (!s || !*s)
+        return -1;
+    v = strtol(s, &end, 10);
+    if (*end != '\0')
+        return -1;
+    if (v < MIN_GAIN_PERCENT || v > MAX_GAIN_PERCENT)
+        return -1;
+    *out = (int)v;
+    return 0;
 }
 
 static int write_vz_byte(FILE *out, unsigned char val)
@@ -173,6 +217,7 @@ int main(int argc, char *argv[])
     const char    *arg_output = NULL;
     int            compat_mode   = 0;
     int            artifact_mode = 0;
+    int            robust_mode   = 0;
 
     FILE          *fin  = NULL;
     FILE          *fout = NULL;
@@ -191,6 +236,10 @@ int main(int argc, char *argv[])
     uint8_t        cksum_lo, cksum_hi;
     uint32_t       fn_write_len;
     uint32_t       total_samples;
+    uint32_t       pre_silence_samples;
+    uint32_t       post_silence_samples;
+    uint32_t       leader_count;
+    uint32_t       sync_count;
     unsigned char  wav_hdr[44];
 
     /* Argument parsing */
@@ -199,6 +248,20 @@ int main(int argc, char *argv[])
             compat_mode = 1;
         else if (strcmp(argv[i], "--artifact") == 0)
             artifact_mode = 1;
+        else if (strcmp(argv[i], "--robust") == 0)
+            robust_mode = 1;
+        else if (strcmp(argv[i], "--gain") == 0) {
+            if (i + 1 >= argc || parse_gain_percent(argv[++i], &g_output_gain_percent) != 0) {
+                fprintf(stderr, "vz2wav: invalid --gain value\n");
+                goto usage;
+            }
+        }
+        else if (strncmp(argv[i], "--gain=", 7) == 0) {
+            if (parse_gain_percent(argv[i] + 7, &g_output_gain_percent) != 0) {
+                fprintf(stderr, "vz2wav: invalid --gain value\n");
+                goto usage;
+            }
+        }
         else if (!arg_input)
             arg_input = argv[i];
         else if (!arg_output)
@@ -212,19 +275,27 @@ int main(int argc, char *argv[])
 usage:
         fprintf(stderr,
             "vz2wav - Convert VZ-200/VZ-300 tape image to WAV audio\n"
-            "Usage: vz2wav [--compat] [--artifact] <input.vz> <output.wav>\n"
+            "Usage: vz2wav [--compat] [--artifact] [--robust] [--gain <percent>] <input.vz> <output.wav>\n"
             "\n"
             "  --compat     Write a malformed WAV matching the original DOS program\n"
             "               (RIFF and data size fields use raw DOS stack garbage).\n"
             "  --artifact   Write the exact Borland C uninitialized stack bytes into\n"
-            "               the 80-byte padding gap instead of 0x7F silence.\n");
+            "               the 80-byte padding gap instead of 0x7F silence.\n"
+            "  --robust     Use longer settle/leader/sync timing for noisy analog paths.\n"
+            "  --gain N     Amplitude delta in percent (range -90..300, default +10).\n");
         return 1;
     }
 
     printf("\nvz2wav - VZ tape image to WAV converter\n");
-    printf("Mode: %s%s\n\n",
+    printf("Mode: %s%s%s\n\n",
            compat_mode   ? "compat (malformed WAV header) " : "clean  (standards WAV header) ",
-           artifact_mode ? "+ artifact padding"             : "");
+           artifact_mode ? "+ artifact padding "            : "",
+           robust_mode   ? "+ robust timing"                : "");
+
+    pre_silence_samples  = robust_mode ? (uint32_t)ROBUST_PRE_SILENCE_SAMPLES  : (uint32_t)SILENCE_SAMPLES;
+    post_silence_samples = robust_mode ? (uint32_t)ROBUST_POST_SILENCE_SAMPLES : (uint32_t)SILENCE_SAMPLES;
+    leader_count         = robust_mode ? (uint32_t)ROBUST_LEADER_COUNT         : (uint32_t)LEADER_COUNT;
+    sync_count           = robust_mode ? (uint32_t)ROBUST_SYNC_COUNT           : (uint32_t)SYNC_COUNT;
 
     /* Read VZ file */
     fin = fopen(arg_input, "rb");
@@ -324,16 +395,17 @@ usage:
 
     /* Total samples */
     total_samples =
-        (uint32_t)SILENCE_SAMPLES
-      + (uint32_t)LEADER_COUNT * 8 * SAMPLES_PER_BIT
-      + (uint32_t)SYNC_COUNT   * 8 * SAMPLES_PER_BIT
+        pre_silence_samples
+      + leader_count           * 8 * SAMPLES_PER_BIT
+      + sync_count             * 8 * SAMPLES_PER_BIT
       + (uint32_t)1            * 8 * SAMPLES_PER_BIT
       + fn_write_len           * 8 * SAMPLES_PER_BIT
       + (uint32_t)PADDING_RAW_BYTES
       + (uint32_t)4            * 8 * SAMPLES_PER_BIT
       + body_len               * 8 * SAMPLES_PER_BIT
       + (uint32_t)2            * 8 * SAMPLES_PER_BIT
-      + (uint32_t)SILENCE_SAMPLES;
+      + (compat_mode ? 0u : ((uint32_t)1 * 8u * (uint32_t)SAMPLES_PER_BIT))
+      + post_silence_samples;
 
     /* Open output */
     fout = fopen(arg_output, "wb");
@@ -347,14 +419,14 @@ usage:
     if (fwrite(wav_hdr, 1, 44, fout) != (size_t)44) goto write_err;
 
     /* Pre-silence */
-    if (write_raw(fout, SILENCE_BYTE, SILENCE_SAMPLES) < 0) goto write_err;
+    if (write_raw(fout, SILENCE_BYTE, pre_silence_samples) < 0) goto write_err;
 
     /* Leader */
-    for (i = 0; i < LEADER_COUNT; i++)
+    for (i = 0; i < (int)leader_count; i++)
         if (write_vz_byte(fout, LEADER_BYTE) < 0) goto write_err;
 
     /* Sync preamble */
-    for (i = 0; i < SYNC_COUNT; i++)
+    for (i = 0; i < (int)sync_count; i++)
         if (write_vz_byte(fout, SYNC_BYTE) < 0) goto write_err;
 
     /* File-type byte */
@@ -390,9 +462,15 @@ usage:
     /* Checksum */
     if (write_vz_byte(fout, cksum_lo) < 0) goto write_err;
     if (write_vz_byte(fout, cksum_hi) < 0) goto write_err;
+    /*
+     * Guard byte after checksum: leaves a clean high/low transition after
+     * the final checksum bit so decoders that classify cycles using a
+     * look-ahead edge can still recover the checksum reliably.
+     */
+    if (!compat_mode && write_vz_byte(fout, POST_CKSUM_GUARD) < 0) goto write_err;
 
     /* Post-silence */
-    if (write_raw(fout, SILENCE_BYTE, SILENCE_SAMPLES) < 0) goto write_err;
+    if (write_raw(fout, SILENCE_BYTE, post_silence_samples) < 0) goto write_err;
 
     printf("Output: %s\n", arg_output);
     printf("  Total audio : %" PRIu32 " samples (%.2f seconds)\n",
@@ -401,6 +479,11 @@ usage:
            compat_mode ? "raw DOS garbage (compat mode -- matches DOS original)" : "correct");
     printf("  Padding     : %s\n",
            artifact_mode ? "Borland artifact bytes (--artifact)" : "0x7F silence (clean)");
+    printf("  Timing      : %s (pre=%" PRIu32 ", leader=%" PRIu32 ", sync=%" PRIu32 ", post=%" PRIu32 ")\n",
+           robust_mode ? "robust" : "normal",
+           pre_silence_samples, leader_count, sync_count, post_silence_samples);
+    printf("  Gain        : %+d%% (scale %.2fx)\n",
+           g_output_gain_percent, (100.0 + (double)g_output_gain_percent) / 100.0);
     printf("\nDone.\n");
 
     ret = 0;

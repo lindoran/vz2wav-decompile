@@ -27,19 +27,17 @@ reproduce the original malformed behavior. These should not be needed
 for normal use, but they allow exact byte-for-byte reproduction of the
 DOS output.
 
-The `wav2vz` decompilation was considerably more difficult. The program
-works, but it still carries over much of the original behavior around
-checksums and end-of-file detection. We believe there are bugs in the old
-code, but there is also a lot of work required to get it to run without
-incorrectly reporting errors. For now it is kept as-is because it does
-what it is supposed to do.
+The `wav2vz` decompilation was considerably more difficult. The original
+DOS behavior around sync/checksum handling and noisy captures needed extra
+work. The current code includes modern decoding improvements while still
+offering a legacy mode.
 
 ## Usage
 
 ### vz2wav
 
 ```bash
-vz2wav [--compat] [--artifact] input.vz output.wav
+vz2wav [--compat] [--artifact] [--robust] [--gain <percent>] input.vz output.wav
 ```
 
 Options:
@@ -59,11 +57,36 @@ Options:
   byte. The VZ hardware treats both identically. Can be combined with
   `--compat`.
 
+- `--robust`
+  Uses a longer settle/leader timing profile for noisy analog paths.
+
+- `--gain <percent>`
+  Signed amplitude delta around center. Example: `--gain 10` means 110%
+  amplitude, `--gain -10` means 90%. Default is `+10`.
+
 ### wav2vz
 
 ```bash
-wav2vz input.wav output.vz
+wav2vz [--legacy|-l] [--gain <percent>] input.wav output.vz
+wav2vz [--legacy|-l] [--gain <percent>] --analyze input.wav
 ```
+
+Options:
+
+- default mode
+  Uses the newer filtered/noise-tolerant decode path (recommended).
+
+- `--legacy`, `-l`
+  Uses original-style threshold behavior.
+
+- `--gain <percent>`
+  Signed input gain delta around center before classification.
+  Default is `+10`.
+
+- `--analyze`, `-a`
+  Analyze-only mode (no `.vz` output). Prints capture diagnostics such as
+  min/max/mean, first signal position, run-length stats, cycle histogram,
+  and short/long/error classification counts.
 
 ### text2bas
 
@@ -81,6 +104,9 @@ text2bas-cg input.txt [output.cas]
 
 If no output filename is given, the program generates one.
 
+`text2bas-vz` now writes a normalized VZ header filename from the input
+basename: extension removed, uppercased, null-padded to the VZ field.
+
 `text2bas` works correctly, but it is not as robust as the version at:
 
 - https://github.com/rweather/vz200-restoration/tree/main/src/bas2vz
@@ -89,9 +115,9 @@ If no output filename is given, the program generates one.
 
 ### wav2vz
 
-`wav2vz` is in a working state. It still has some cases where it reports
-that the file was read incorrectly even though the output is valid. More
-work is needed to tighten this up, but it is stable enough for now.
+`wav2vz` is working well for both synthetic and real hardware recordings.
+The default filtered mode is intended for practical capture workflows.
+Use `--legacy` when you specifically need original-style behavior.
 
 ### MinGW Version (Win32 console)
 

@@ -11,7 +11,8 @@
  *   MinGW Win32 : gcc  -std=c99 -O2 -Wall -Wextra -o wav2vz.exe wav2vz.c
  *   MinGW Win64 : same -- Win32 ABI honoured via LLP64; 'long' not used
  *
- * Usage:  wav2vz  input.wav  output.vz
+ * Usage:  wav2vz [--legacy|-l] [--gain <percent>] input.wav output.vz
+ *         wav2vz [--legacy|-l] [--gain <percent>] --analyze input.wav
  *
  * -------------------------------------------------------------------------
  * Portability audit (GCC/Linux vs MinGW/Win32 and Win64):
@@ -83,20 +84,21 @@
  * FindCycle() counts the total samples in one high+low pair and maps the
  * count to one of three states:
  *
- *   CYCLE_SHORT : total in [9..14]   -- encodes bit 0
- *   CYCLE_LONG  : total in [17..29]  -- encodes bit 1 / leader
+ *   CYCLE_SHORT : default total in [9..14]   -- encodes bit 0
+ *   CYCLE_LONG  : default total in [17..29]  -- encodes bit 1 / leader
  *   CYCLE_ERROR : anything else      -- indeterminate, skip
  *
- * Boundary values are lifted verbatim from the original ASM:
- *   cmp si, 08h  / jle -> lower exclusive: short total >= 9
- *   cmp si, 0Fh  / jge -> upper exclusive: short total <= 14
- *   cmp si, 10h  / jle -> lower exclusive: long  total >= 17
- *   cmp si, 1Eh  / jge -> upper exclusive: long  total <= 29
+ * Capture mode widens these windows for noisy real-world line recordings.
  * ----------------------------------------------------------------------- */
-#define CYCLE_SHORT_LO   9
-#define CYCLE_SHORT_HI  14
-#define CYCLE_LONG_LO   17
-#define CYCLE_LONG_HI   29
+#define CYCLE_SHORT_LO_NORMAL   8
+#define CYCLE_SHORT_HI_NORMAL  14
+#define CYCLE_LONG_LO_NORMAL   16
+#define CYCLE_LONG_HI_NORMAL   29
+
+#define CYCLE_SHORT_LO_CAPTURE  7
+#define CYCLE_SHORT_HI_CAPTURE 16
+#define CYCLE_LONG_LO_CAPTURE  16
+#define CYCLE_LONG_HI_CAPTURE  36
 
 /* Stored and compared as uint8_t throughout -- no implicit sign issues. */
 #define CYCLE_SHORT  ((uint8_t)0x00u)
@@ -107,6 +109,19 @@
 #define TAPE_LEADER_THRESH  0x90u   /* raw WAV sample; leader found >= this */
 #define TAPE_START_BYTE     0x80u   /* end of leader, start of encoded data */
 #define TAPE_PREAMBLE_BYTE  0xFEu   /* preamble sync byte (appears 5 times) */
+
+/*
+ * Schmitt trigger thresholds for robust edge detection on noisy captures.
+ * Values are centered around 0x80 with hysteresis to avoid threshold chatter.
+ */
+#define LOGIC_CENTER               0x80u
+#define LOGIC_HIGH_THRESH_NORMAL   0x92u
+#define LOGIC_LOW_THRESH_NORMAL    0x6Eu
+#define LOGIC_HIGH_THRESH_CAPTURE  0x98u
+#define LOGIC_LOW_THRESH_CAPTURE   0x68u
+#define DEFAULT_INPUT_GAIN_PERCENT 10
+#define MIN_INPUT_GAIN_PERCENT    -90
+#define MAX_INPUT_GAIN_PERCENT    300
 
 /* -----------------------------------------------------------------------
  * WAV RIFF header -- packed struct to match the on-disk RIFF layout.
@@ -184,6 +199,34 @@ static int g_allow_eof = 0;
 static int g_hit_eof = 0;
 static int g_budget_active = 0;
 static size_t g_budget_remaining = 0;
+static int g_logic_state = -1;
+static int g_capture_mode = 1;
+static unsigned g_prev_raw1 = LOGIC_CENTER;
+static unsigned g_prev_raw2 = LOGIC_CENTER;
+static int g_input_gain_percent = DEFAULT_INPUT_GAIN_PERCENT;
+
+static int parse_gain_percent(const char *s, int *out)
+{
+    char *end = NULL;
+    long v;
+    if (!s || !*s)
+        return -1;
+    v = strtol(s, &end, 10);
+    if (*end != '\0')
+        return -1;
+    if (v < MIN_INPUT_GAIN_PERCENT || v > MAX_INPUT_GAIN_PERCENT)
+        return -1;
+    *out = (int)v;
+    return 0;
+}
+
+static void get_cycle_window(int *short_lo, int *short_hi, int *long_lo, int *long_hi)
+{
+    *short_lo = g_capture_mode ? CYCLE_SHORT_LO_CAPTURE : CYCLE_SHORT_LO_NORMAL;
+    *short_hi = g_capture_mode ? CYCLE_SHORT_HI_CAPTURE : CYCLE_SHORT_HI_NORMAL;
+    *long_lo  = g_capture_mode ? CYCLE_LONG_LO_CAPTURE  : CYCLE_LONG_LO_NORMAL;
+    *long_hi  = g_capture_mode ? CYCLE_LONG_HI_CAPTURE  : CYCLE_LONG_HI_NORMAL;
+}
 
 /* -----------------------------------------------------------------------
  * fatal() -- print error, close files, exit.
@@ -239,6 +282,42 @@ static void budget_stop(void)
     g_budget_active = 0;
 }
 
+static int sample_is_high(int c)
+{
+    unsigned uc = (unsigned)c;
+    const unsigned hi_thresh = g_capture_mode ? LOGIC_HIGH_THRESH_CAPTURE
+                                              : LOGIC_HIGH_THRESH_NORMAL;
+    const unsigned lo_thresh = g_capture_mode ? LOGIC_LOW_THRESH_CAPTURE
+                                              : LOGIC_LOW_THRESH_NORMAL;
+
+    if (g_capture_mode) {
+        /* 3-tap smoothing suppresses one-sample spikes from noisy captures. */
+        unsigned raw = uc;
+        uc = (uc + g_prev_raw1 + g_prev_raw2) / 3u;
+        g_prev_raw2 = g_prev_raw1;
+        g_prev_raw1 = raw;
+    }
+
+    {
+        int gain_num = 100 + g_input_gain_percent;
+        int centered = (int)uc - (int)LOGIC_CENTER;
+        int scaled = (int)LOGIC_CENTER + (centered * gain_num) / 100;
+        if (scaled < 0) scaled = 0;
+        if (scaled > 255) scaled = 255;
+        uc = (unsigned)scaled;
+    }
+
+    if (g_logic_state < 0)
+        g_logic_state = (uc >= LOGIC_CENTER) ? 1 : 0;
+
+    if (uc >= hi_thresh)
+        g_logic_state = 1;
+    else if (uc <= lo_thresh)
+        g_logic_state = 0;
+
+    return g_logic_state;
+}
+
 static int resync_to_high(void)
 {
     int c;
@@ -246,9 +325,158 @@ static int resync_to_high(void)
         c = safe_fgetc();
         if (c == EOF)
             return -1;
-    } while ((unsigned)c <= 0x7Fu);
+    } while (!sample_is_high(c));
     ungetc(c, g_wav);
     return 0;
+}
+
+static void analyze_wav_stream(void)
+{
+    int c;
+    unsigned long long sum = 0ULL;
+    unsigned long long sample_count = 0ULL;
+    unsigned long long hi_samples = 0ULL;
+    unsigned long long hi_runs = 0ULL;
+    unsigned long long lo_runs = 0ULL;
+    unsigned long long hi_run_sum = 0ULL;
+    unsigned long long lo_run_sum = 0ULL;
+    unsigned long long cycle_pairs = 0ULL;
+    unsigned long long short_cycles = 0ULL;
+    unsigned long long long_cycles = 0ULL;
+    unsigned long long err_cycles = 0ULL;
+    unsigned long long hist[81] = {0ULL};
+    int min_sample = 255;
+    int max_sample = 0;
+    long long first_signal_idx = -1;
+    int prev_state = -1;
+    int run_len = 0;
+    int pending_hi_len = 0;
+    int short_lo, short_hi, long_lo, long_hi;
+
+    get_cycle_window(&short_lo, &short_hi, &long_lo, &long_hi);
+
+    g_logic_state = -1;
+    g_prev_raw1 = LOGIC_CENTER;
+    g_prev_raw2 = LOGIC_CENTER;
+
+    while ((c = fgetc(g_wav)) != EOF) {
+        unsigned uc = (unsigned)c;
+        int state = sample_is_high(c);
+
+        if (first_signal_idx < 0 && uc >= TAPE_LEADER_THRESH)
+            first_signal_idx = (long long)sample_count;
+
+        if ((int)uc < min_sample) min_sample = (int)uc;
+        if ((int)uc > max_sample) max_sample = (int)uc;
+        sum += uc;
+        sample_count++;
+        if (state) hi_samples++;
+
+        if (prev_state < 0) {
+            prev_state = state;
+            run_len = 1;
+            continue;
+        }
+
+        if (state == prev_state) {
+            run_len++;
+            continue;
+        }
+
+        if (prev_state) {
+            hi_runs++;
+            hi_run_sum += (unsigned long long)run_len;
+            pending_hi_len = run_len;
+        } else {
+            lo_runs++;
+            lo_run_sum += (unsigned long long)run_len;
+            if (pending_hi_len > 0) {
+                int total = pending_hi_len + run_len;
+                cycle_pairs++;
+                if (total >= 0 && total <= 80)
+                    hist[total]++;
+                if (total > short_lo && total <= short_hi)
+                    short_cycles++;
+                else if (total > long_lo && total <= long_hi)
+                    long_cycles++;
+                else
+                    err_cycles++;
+                pending_hi_len = 0;
+            }
+        }
+
+        prev_state = state;
+        run_len = 1;
+    }
+
+    if (run_len > 0) {
+        if (prev_state) {
+            hi_runs++;
+            hi_run_sum += (unsigned long long)run_len;
+        } else {
+            lo_runs++;
+            lo_run_sum += (unsigned long long)run_len;
+            if (pending_hi_len > 0) {
+                int total = pending_hi_len + run_len;
+                cycle_pairs++;
+                if (total >= 0 && total <= 80)
+                    hist[total]++;
+                if (total > short_lo && total <= short_hi)
+                    short_cycles++;
+                else if (total > long_lo && total <= long_hi)
+                    long_cycles++;
+                else
+                    err_cycles++;
+            }
+        }
+    }
+
+    printf("Analysis Summary:\n");
+    printf("  Mode             : %s\n", g_capture_mode ? "capture (filtered)" : "legacy");
+    printf("  Samples          : %llu\n", sample_count);
+    if (sample_count > 0ULL) {
+        printf("  Min/Max          : %d / %d\n", min_sample, max_sample);
+        printf("  Mean             : %.2f\n", (double)sum / (double)sample_count);
+        printf("  High ratio       : %.2f%%\n", 100.0 * (double)hi_samples / (double)sample_count);
+    }
+    if (first_signal_idx >= 0)
+        printf("  First signal @   : sample %lld\n", first_signal_idx);
+    else
+        printf("  First signal @   : not found (>=0x%02X)\n", TAPE_LEADER_THRESH);
+
+    printf("  High runs        : %llu", hi_runs);
+    if (hi_runs > 0ULL)
+        printf(" (avg %.2f)", (double)hi_run_sum / (double)hi_runs);
+    printf("\n");
+    printf("  Low runs         : %llu", lo_runs);
+    if (lo_runs > 0ULL)
+        printf(" (avg %.2f)", (double)lo_run_sum / (double)lo_runs);
+    printf("\n");
+    printf("  Cycle window     : short (%d,%d], long (%d,%d]\n",
+           short_lo, short_hi, long_lo, long_hi);
+    printf("  Cycle pairs      : %llu\n", cycle_pairs);
+    if (cycle_pairs > 0ULL) {
+        printf("  Classified       : short=%llu long=%llu error=%llu\n",
+               short_cycles, long_cycles, err_cycles);
+    }
+
+    printf("  Cycle histogram  :");
+    {
+        int k, printed = 0;
+        for (k = 1; k <= 80; k++) {
+            if (hist[k] == 0ULL)
+                continue;
+            if (printed == 12) {
+                printf(" ...");
+                break;
+            }
+            printf(" %d:%llu", k, hist[k]);
+            printed++;
+        }
+        if (printed == 0)
+            printf(" none");
+    }
+    printf("\n");
 }
 
 /* -----------------------------------------------------------------------
@@ -267,19 +495,23 @@ static uint8_t FindCycle(void)
     int hi_count;
     int lo_count;
     int total;
+    const int short_lo = g_capture_mode ? CYCLE_SHORT_LO_CAPTURE : CYCLE_SHORT_LO_NORMAL;
+    const int short_hi = g_capture_mode ? CYCLE_SHORT_HI_CAPTURE : CYCLE_SHORT_HI_NORMAL;
+    const int long_lo  = g_capture_mode ? CYCLE_LONG_LO_CAPTURE  : CYCLE_LONG_LO_NORMAL;
+    const int long_hi  = g_capture_mode ? CYCLE_LONG_HI_CAPTURE  : CYCLE_LONG_HI_NORMAL;
 
     /* Advance to the next high sample (> 0x7F) */
     do {
         c = safe_fgetc();
         if (c == EOF) return CYCLE_ERROR;
-    } while ((unsigned)c <= 0x7Fu);
+    } while (!sample_is_high(c));
 
     /* Count consecutive high samples; c holds the first one already */
     hi_count = 1;
     for (;;) {
         c = safe_fgetc();
         if (c == EOF) return CYCLE_ERROR;
-        if ((unsigned)c <= 0x7Fu) break;
+        if (!sample_is_high(c)) break;
         hi_count++;
     }
 
@@ -288,7 +520,7 @@ static uint8_t FindCycle(void)
     for (;;) {
         c = safe_fgetc();
         if (c == EOF) return CYCLE_ERROR;
-        if ((unsigned)c > 0x7Fu) break;
+        if (sample_is_high(c)) break;
         lo_count++;
     }
 
@@ -299,8 +531,8 @@ static uint8_t FindCycle(void)
     /* Classify */
     total = hi_count + lo_count;
 
-    if (total > CYCLE_SHORT_LO && total <= CYCLE_SHORT_HI) return CYCLE_SHORT;
-    if (total > CYCLE_LONG_LO  && total <= CYCLE_LONG_HI)  return CYCLE_LONG;
+    if (total > short_lo && total <= short_hi) return CYCLE_SHORT;
+    if (total > long_lo  && total <= long_hi)  return CYCLE_LONG;
     return CYCLE_ERROR;
 }
 
@@ -370,6 +602,9 @@ static uint16_t read_u16_le(void)
  * ----------------------------------------------------------------------- */
 int main(int argc, char *argv[])
 {
+    const char *input_path = NULL;
+    const char *output_path = NULL;
+    int analyze_mode = 0;
     WavHeader  wav_hdr;
     VzHeader   vz_hdr;
     uint8_t    b;               /* decoded tape byte                        */
@@ -385,15 +620,56 @@ int main(int argc, char *argv[])
     /* ------------------------------------------------------------------ */
     printf("\t\tWAV2VZ - ");
     printf("WAV file to .VZ converter\n\n");
-    printf("Usage: WAV2VZ wavfile.wav vzfile.vz\n\n");
+    printf("Usage: WAV2VZ [--legacy|-l] [--gain <percent>] wavfile.wav vzfile.vz\n");
+    printf("       WAV2VZ [--legacy|-l] [--gain <percent>] --analyze wavfile.wav\n\n");
 
     /* ------------------------------------------------------------------ */
     /* Argument check                                                       */
     /* ------------------------------------------------------------------ */
-    if (argc != 3) {
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--legacy") == 0 || strcmp(argv[i], "-l") == 0) {
+            g_capture_mode = 0;
+        } else if (strcmp(argv[i], "--gain") == 0) {
+            if (i + 1 >= argc || parse_gain_percent(argv[++i], &g_input_gain_percent) != 0) {
+                printf("error -- invalid --gain value\n");
+                exit(1);
+            }
+        } else if (strncmp(argv[i], "--gain=", 7) == 0) {
+            if (parse_gain_percent(argv[i] + 7, &g_input_gain_percent) != 0) {
+                printf("error -- invalid --gain value\n");
+                exit(1);
+            }
+        } else if (strcmp(argv[i], "--analyze") == 0 || strcmp(argv[i], "-a") == 0) {
+            analyze_mode = 1;
+        } else if (strcmp(argv[i], "--capture") == 0 || strcmp(argv[i], "-c") == 0) {
+            g_capture_mode = 1;
+        } else if (!input_path) {
+            input_path = argv[i];
+        } else if (!output_path) {
+            output_path = argv[i];
+        } else {
+            input_path = NULL;
+            break;
+        }
+    }
+
+    if (!input_path || (!analyze_mode && !output_path) || (analyze_mode && output_path)) {
         printf("error -- must specify input & output file\n");
         exit(1);
     }
+
+    if (analyze_mode)
+        printf("Operation          : analyze-only\n");
+    if (g_capture_mode)
+        printf("Decode mode        : capture (noise-tolerant)\n\n");
+    else
+        printf("Decode mode        : legacy (original thresholds)\n\n");
+    printf("Input gain         : %+d%% (scale %.2fx)\n\n",
+           g_input_gain_percent, (100.0 + (double)g_input_gain_percent) / 100.0);
+
+    g_logic_state = -1;
+    g_prev_raw1 = LOGIC_CENTER;
+    g_prev_raw2 = LOGIC_CENTER;
 
     /* ------------------------------------------------------------------ */
     /* Open WAV input                                                       */
@@ -401,7 +677,7 @@ int main(int argc, char *argv[])
     printf("Opening WAV file......");
     fflush(stdout);
 
-    g_wav = fopen(argv[1], "rb");
+    g_wav = fopen(input_path, "rb");
     if (!g_wav) {
         printf("error -- file doesn't exist\n");
         exit(1);
@@ -427,10 +703,17 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
+    if (analyze_mode) {
+        analyze_wav_stream();
+        fclose(g_wav);
+        g_wav = NULL;
+        return 0;
+    }
+
     /* ------------------------------------------------------------------ */
     /* Open VZ output                                                       */
     /* ------------------------------------------------------------------ */
-    g_vz = fopen(argv[2], "wb");
+    g_vz = fopen(output_path, "wb");
     if (!g_vz) {
         printf("error -- couldn't create output file\n");
         fclose(g_wav);
@@ -548,7 +831,16 @@ int main(int argc, char *argv[])
     /* no overflow.  checksum_calc wraps at 65536 (uint16_t arithmetic)   */
     /* matching the original 16-bit DOS accumulator.                       */
     /* ------------------------------------------------------------------ */
-    checksum_calc = 0u;
+    /*
+     * Tape checksum includes start/end address bytes plus payload bytes.
+     * This matches the encoder and original DOS behaviour.
+     */
+    checksum_calc = (uint16_t)(
+          (start_addr & 0x00FFu)
+        + ((start_addr >> 8) & 0x00FFu)
+        + (end_addr & 0x00FFu)
+        + ((end_addr >> 8) & 0x00FFu)
+    );
     for (i = 0; i < (int)data_size; i++) {
         b = ReadVZbyte();
         checksum_calc = (uint16_t)(checksum_calc + (uint16_t)b);

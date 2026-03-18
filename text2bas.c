@@ -298,32 +298,40 @@ int main(int ac, char **av)
 #else
     /* VZ magic header */
     fwrite("VZF0", 1, 4, out);
-    /* write input filename (basename only, uppercase, null-padded to 17 bytes) */
-    p = strrchr(inpfilename, '/');
-    if (p)
-        p++;
-    else
-        p = inpfilename;
-    
-    char basename[18];
-    size_t copy_len = strlen(p);
-    if (copy_len > 16)
-        copy_len = 16;
-    memset(basename, 0, sizeof(basename));
-    memcpy(basename, p, copy_len);
-    basename[copy_len] = '\0';
-    
-    /* Convert to uppercase and truncate at extension */
-    for (int i = 0; i < 17 && basename[i]; i++)
+    /* Write input basename (without extension), uppercased, NUL-padded to 17 bytes. */
     {
-        if (basename[i] == '.')
-        {
-            basename[i] = 0;
-            break;
-        }
-        basename[i] = toupper((unsigned char)basename[i]);
+        char basename[17];
+        const char *name_start;
+        const char *slash1;
+        const char *slash2;
+        const char *dot;
+        size_t copy_len;
+        size_t j;
+
+        memset(basename, 0, sizeof(basename));
+
+        slash1 = strrchr(inpfilename, '/');
+        slash2 = strrchr(inpfilename, '\\');
+        name_start = inpfilename;
+        if (slash1 && (!slash2 || slash1 > slash2))
+            name_start = slash1 + 1;
+        else if (slash2)
+            name_start = slash2 + 1;
+
+        dot = strrchr(name_start, '.');
+        if (dot && dot > name_start)
+            copy_len = (size_t)(dot - name_start);
+        else
+            copy_len = strlen(name_start);
+
+        if (copy_len > 16)
+            copy_len = 16;
+
+        for (j = 0; j < copy_len; j++)
+            basename[j] = (char)toupper((unsigned char)name_start[j]);
+
+        fwrite(basename, 1, 17, out);
     }
-    fwrite(basename, 1, 17, out);
     
     /* VZ magic value 0xf0 */
     fputc(0xf0, out);
