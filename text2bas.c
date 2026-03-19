@@ -229,6 +229,12 @@ int main(int ac, char **av)
             flag_squeeze_blanks = 0;
             arg_idx++;
         }
+        else if (av[arg_idx][0] == '-')
+        {
+            fprintf(stderr, "Unknown argument: %s\n", av[arg_idx]);
+            print_usage(av[0]);
+            return 1;
+        }
         else if (inpfilename[0] == 0)
         {
             strcpy(inpfilename, av[arg_idx]);

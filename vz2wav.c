@@ -6,27 +6,30 @@
  * output produced by the original DOS application.
  *
  * Usage:
- *   vz2wav [--compat] [--artifact] [--robust] [--gain <percent>] <input.vz> <output.wav>
+ *   vz2wav [--compat|-c] [--artifact|-a] [--robust|-r] [--gain|-g <percent>] <input.vz> <output.wav>
  *
- *   --compat    Produce a "malformed" WAV file that matches the DOS original
+ *   --compat, -c
+ *               Produce a "malformed" WAV file that matches the DOS original
  *               exactly: the RIFF and data chunk size fields are set to the
  *               raw DOS stack garbage values (0x00146e0c and 0x01140000) because
  *               the DOS program never rewound the file to fix them.
  *               Most WAV players handle this gracefully.  Omit --compat for a
  *               standards-compliant WAV file with correct size fields.
  *
- *   --artifact  Write the exact 80-byte uninitialized Borland C stack pattern
+ *   --artifact, -a
+ *               Write the exact 80-byte uninitialized Borland C stack pattern
  *               into the padding gap between the filename and address block,
  *               instead of 80 x 0x7F.  This matches the padding bytes found
  *               in the known-good DOS binary output byte-for-byte.  The VZ
  *               hardware treats both identically (both are below the comparator
  *               threshold).  Can be combined with --compat.
  *
- *   --robust    Emit a more tolerant waveform envelope for real-world analog
+ *   --robust, -r
+ *               Emit a more tolerant waveform envelope for real-world analog
  *               paths (longer settle time, leader, and sync burst). This is
  *               intended for noisy line-in/line-out chains.
  *
- *   --gain      Signed percent delta applied around 0x7F center.
+ *   --gain, -g  Signed percent delta applied around 0x7F center.
  *               Example: --gain 10 => 110% amplitude, --gain -10 => 90%.
  *
  * Build (Linux / GCC):
@@ -244,13 +247,13 @@ int main(int argc, char *argv[])
 
     /* Argument parsing */
     for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--compat") == 0)
+        if (strcmp(argv[i], "--compat") == 0 || strcmp(argv[i], "-c") == 0)
             compat_mode = 1;
-        else if (strcmp(argv[i], "--artifact") == 0)
+        else if (strcmp(argv[i], "--artifact") == 0 || strcmp(argv[i], "-a") == 0)
             artifact_mode = 1;
-        else if (strcmp(argv[i], "--robust") == 0)
+        else if (strcmp(argv[i], "--robust") == 0 || strcmp(argv[i], "-r") == 0)
             robust_mode = 1;
-        else if (strcmp(argv[i], "--gain") == 0) {
+        else if (strcmp(argv[i], "--gain") == 0 || strcmp(argv[i], "-g") == 0) {
             if (i + 1 >= argc || parse_gain_percent(argv[++i], &g_output_gain_percent) != 0) {
                 fprintf(stderr, "vz2wav: invalid --gain value\n");
                 goto usage;
@@ -275,14 +278,14 @@ int main(int argc, char *argv[])
 usage:
         fprintf(stderr,
             "vz2wav - Convert VZ-200/VZ-300 tape image to WAV audio\n"
-            "Usage: vz2wav [--compat] [--artifact] [--robust] [--gain <percent>] <input.vz> <output.wav>\n"
+            "Usage: vz2wav [--compat|-c] [--artifact|-a] [--robust|-r] [--gain|-g <percent>] <input.vz> <output.wav>\n"
             "\n"
-            "  --compat     Write a malformed WAV matching the original DOS program\n"
+            "  --compat,-c  Write a malformed WAV matching the original DOS program\n"
             "               (RIFF and data size fields use raw DOS stack garbage).\n"
-            "  --artifact   Write the exact Borland C uninitialized stack bytes into\n"
+            "  --artifact,-a Write the exact Borland C uninitialized stack bytes into\n"
             "               the 80-byte padding gap instead of 0x7F silence.\n"
-            "  --robust     Use longer settle/leader/sync timing for noisy analog paths.\n"
-            "  --gain N     Amplitude delta in percent (range -90..300, default +10).\n");
+            "  --robust,-r  Use longer settle/leader/sync timing for noisy analog paths.\n"
+            "  --gain,-g N  Amplitude delta in percent (range -90..300, default +10).\n");
         return 1;
     }
 

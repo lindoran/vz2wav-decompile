@@ -11,8 +11,8 @@
  *   MinGW Win32 : gcc  -std=c99 -O2 -Wall -Wextra -o wav2vz.exe wav2vz.c
  *   MinGW Win64 : same -- Win32 ABI honoured via LLP64; 'long' not used
  *
- * Usage:  wav2vz [--legacy|-l] [--gain <percent>] input.wav output.vz
- *         wav2vz [--legacy|-l] [--gain <percent>] --analyze input.wav
+ * Usage:  wav2vz [--legacy|-l] [--gain|-g <percent>] input.wav output.vz
+ *         wav2vz [--legacy|-l] [--gain|-g <percent>] --analyze input.wav
  *
  * -------------------------------------------------------------------------
  * Portability audit (GCC/Linux vs MinGW/Win32 and Win64):
@@ -620,8 +620,8 @@ int main(int argc, char *argv[])
     /* ------------------------------------------------------------------ */
     printf("\t\tWAV2VZ - ");
     printf("WAV file to .VZ converter\n\n");
-    printf("Usage: WAV2VZ [--legacy|-l] [--gain <percent>] wavfile.wav vzfile.vz\n");
-    printf("       WAV2VZ [--legacy|-l] [--gain <percent>] --analyze wavfile.wav\n\n");
+    printf("Usage: WAV2VZ [--legacy|-l] [--gain|-g <percent>] wavfile.wav vzfile.vz\n");
+    printf("       WAV2VZ [--legacy|-l] [--gain|-g <percent>] --analyze wavfile.wav\n\n");
 
     /* ------------------------------------------------------------------ */
     /* Argument check                                                       */
@@ -629,7 +629,7 @@ int main(int argc, char *argv[])
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--legacy") == 0 || strcmp(argv[i], "-l") == 0) {
             g_capture_mode = 0;
-        } else if (strcmp(argv[i], "--gain") == 0) {
+        } else if (strcmp(argv[i], "--gain") == 0 || strcmp(argv[i], "-g") == 0) {
             if (i + 1 >= argc || parse_gain_percent(argv[++i], &g_input_gain_percent) != 0) {
                 printf("error -- invalid --gain value\n");
                 exit(1);

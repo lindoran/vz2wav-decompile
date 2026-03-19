@@ -34,7 +34,7 @@ BIN_LINUX    = $(BIN_DIR)/ia64-linux
 BIN_WIN      = $(BIN_DIR)/mingw-ia32
 BIN_DOS_GCC  = $(BIN_DIR)/ia16-gcc
 
-PROGRAMS = vz2wav wav2vz text2bas-vz text2bas-cg
+PROGRAMS = vz2wav wav2vz text2bas-vz text2bas-cg vzexport
 
 # =============================================================================
 .PHONY: all linux windows dos build-all package-all \
@@ -69,11 +69,13 @@ linux: dirs $(BIN_LINUX) \
        $(BIN_LINUX)/vz2wav \
        $(BIN_LINUX)/wav2vz \
        $(BIN_LINUX)/text2bas-vz \
-       $(BIN_LINUX)/text2bas-cg
+       $(BIN_LINUX)/text2bas-cg \
+       $(BIN_LINUX)/vzexport
 	@echo "Built: $(BIN_LINUX)/vz2wav"
 	@echo "Built: $(BIN_LINUX)/wav2vz"
 	@echo "Built: $(BIN_LINUX)/text2bas-vz"
 	@echo "Built: $(BIN_LINUX)/text2bas-cg"
+	@echo "Built: $(BIN_LINUX)/vzexport"
 	$(MAKE) package-linux
 
 $(BIN_LINUX):
@@ -91,6 +93,9 @@ $(BIN_LINUX)/text2bas-vz: text2bas.c
 $(BIN_LINUX)/text2bas-cg: text2bas.c
 	$(CC_LINUX) $(CFLAGS) -DCGENIE=1 -o $@ $<
 
+$(BIN_LINUX)/vzexport: vzexport.c
+	$(CC_LINUX) $(CFLAGS) -o $@ $<
+
 # =============================================================================
 # Windows (MinGW) Builds
 # =============================================================================
@@ -98,11 +103,13 @@ windows: dirs $(BIN_WIN) \
 		 $(BIN_WIN)/vz2wav.exe \
 		 $(BIN_WIN)/wav2vz.exe \
 		 $(BIN_WIN)/text2bas-vz.exe \
-		 $(BIN_WIN)/text2bas-cg.exe
+		 $(BIN_WIN)/text2bas-cg.exe \
+		 $(BIN_WIN)/vzexport.exe
 	@echo "Built: $(BIN_WIN)/vz2wav.exe"
 	@echo "Built: $(BIN_WIN)/wav2vz.exe"
 	@echo "Built: $(BIN_WIN)/text2bas-vz.exe"
 	@echo "Built: $(BIN_WIN)/text2bas-cg.exe"
+	@echo "Built: $(BIN_WIN)/vzexport.exe"
 	$(MAKE) package-windows
 
 $(BIN_WIN):
@@ -120,6 +127,9 @@ $(BIN_WIN)/text2bas-vz.exe: text2bas.c
 $(BIN_WIN)/text2bas-cg.exe: text2bas.c
 	$(CC_WIN) $(CFLAGS) -DCGENIE=1 -o $@ $<
 
+$(BIN_WIN)/vzexport.exe: vzexport.c
+	$(CC_WIN) $(CFLAGS) -o $@ $<
+
 # =============================================================================
 # DOS Builds (ia16 only)
 # =============================================================================
@@ -127,11 +137,13 @@ dos: dirs $(BIN_DOS_GCC) \
 	 $(BIN_DOS_GCC)/vz2wav.exe \
 	 $(BIN_DOS_GCC)/wav2vz.exe \
 	 $(BIN_DOS_GCC)/text2bas-vz.exe \
-	 $(BIN_DOS_GCC)/text2bas-cg.exe
+	 $(BIN_DOS_GCC)/text2bas-cg.exe \
+	 $(BIN_DOS_GCC)/vzexport.exe
 	@echo "Built: $(BIN_DOS_GCC)/vz2wav.exe"
 	@echo "Built: $(BIN_DOS_GCC)/wav2vz.exe"
 	@echo "Built: $(BIN_DOS_GCC)/text2bas-vz.exe"
 	@echo "Built: $(BIN_DOS_GCC)/text2bas-cg.exe"
+	@echo "Built: $(BIN_DOS_GCC)/vzexport.exe"
 	$(MAKE) package-dos
 
 $(BIN_DOS_GCC):
@@ -148,6 +160,9 @@ $(BIN_DOS_GCC)/text2bas-vz.exe: text2bas.c
 
 $(BIN_DOS_GCC)/text2bas-cg.exe: text2bas.c
 	$(IA16) -mcmodel=small -DCGENIE=1 -o $@ $<
+
+$(BIN_DOS_GCC)/vzexport.exe: vzexport.c
+	$(IA16) -mcmodel=small -o $@ $<
 
 # =============================================================================
 # Packaging rules

@@ -178,24 +178,27 @@ last line of a file if there was no terminated CR/LF or CR.
 
 ## TODO
 
-### Near-term tooling
+### Swiss-Army front end
 
-- Build a true single front-end command that auto-detects input type and
-  dispatches to the right conversion path (today this is split across
-  `text2bas`, `vz2wav`, `wav2vz`, and `vzexport`).
-- Add direct binary-to-`.vz` support for machine-code files (`VZFO` /
-  `0xF1`) with explicit start-address control.
-- Add `.cas` and additional output pathways to `vzexport` where practical.
-- Extend BASIC detokenization output quality (formatting, edge-case tokens,
-  and comments/strings fidelity checks).
-- Add more end-to-end fixtures (BASIC and machine-code) for round-trip tests
-  across Linux/Windows/ia16 builds.
+Create a unified tool that accepts a file and produces multiple output
+formats:
 
-### Signal path options
+- `.bas`
+- `.vz`
+- `.cas`
+- `.bin`
+- `.hex`
+- `.srec`
 
-- Add optional waveform inversion controls for encode/decode paths.
-- Add optional square-wave output profile in `vz2wav` for compatibility
-  experiments on difficult analog/emulator setups.
+Add options for:
+
+- Waveform inversion
+- Input filtering
+- Square-wave output patterns
+
+Modern sound cards do not care much about waveform shape, but square
+waves may help with emulator loading or converting sampled audio from
+the VZ.
 
 ### Long-term goals
 
