@@ -59,6 +59,10 @@
 #include <string.h>
 #include <stdint.h>
 
+#ifndef TOOL_VERSION
+#define TOOL_VERSION "dev"
+#endif
+
 /* -----------------------------------------------------------------------
  * Compile-time assertion.
  * C11 _Static_assert is available in GCC >= 4.6 and MinGW >= 4.6.
@@ -204,6 +208,13 @@ static int g_capture_mode = 1;
 static unsigned g_prev_raw1 = LOGIC_CENTER;
 static unsigned g_prev_raw2 = LOGIC_CENTER;
 static int g_input_gain_percent = DEFAULT_INPUT_GAIN_PERCENT;
+
+static void print_usage(void)
+{
+    printf("Usage: WAV2VZ [--legacy|-l] [--gain|-g <percent>] wavfile.wav vzfile.vz\n");
+    printf("       WAV2VZ [--legacy|-l] [--gain|-g <percent>] --analyze wavfile.wav\n");
+    printf("       WAV2VZ --version|-V\n\n");
+}
 
 static int parse_gain_percent(const char *s, int *out)
 {
@@ -615,13 +626,23 @@ int main(int argc, char *argv[])
     uint16_t   start_addr, end_addr, data_size;
     uint16_t   checksum_calc, checksum_tape;
 
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0) {
+            printf("wav2vz version %s\n", TOOL_VERSION);
+            return 0;
+        }
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage();
+            return 0;
+        }
+    }
+
     /* ------------------------------------------------------------------ */
     /* Banner (strings from 0B42 data segment of the original EXE)         */
     /* ------------------------------------------------------------------ */
-    printf("\t\tWAV2VZ - ");
+    printf("\t\tWAV2VZ v%s - ", TOOL_VERSION);
     printf("WAV file to .VZ converter\n\n");
-    printf("Usage: WAV2VZ [--legacy|-l] [--gain|-g <percent>] wavfile.wav vzfile.vz\n");
-    printf("       WAV2VZ [--legacy|-l] [--gain|-g <percent>] --analyze wavfile.wav\n\n");
+    print_usage();
 
     /* ------------------------------------------------------------------ */
     /* Argument check                                                       */
@@ -655,6 +676,7 @@ int main(int argc, char *argv[])
 
     if (!input_path || (!analyze_mode && !output_path) || (analyze_mode && output_path)) {
         printf("error -- must specify input & output file\n");
+        print_usage();
         exit(1);
     }
 

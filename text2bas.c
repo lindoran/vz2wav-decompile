@@ -7,6 +7,10 @@
 #include <strings.h>
 #include <ctype.h>
 
+#ifndef TOOL_VERSION
+#define TOOL_VERSION "dev"
+#endif
+
 #if defined(_WIN32) && !defined(strncasecmp)
 #define strncasecmp _strnicmp
 #endif
@@ -81,6 +85,7 @@ void tokenize(int i)
 {
     int t;
     int len;
+    size_t move_len;
 
     for (t = 0x80; token[t-0x80]; t++)
     {
@@ -89,14 +94,16 @@ void tokenize(int i)
         {
             if (t > 0xFF)
             {
-                strcpy((char*)(line.text + i + 2), (char*)(line.text + i + len));
+                move_len = strlen((char*)(line.text + i + len)) + 1;
+                memmove((char*)(line.text + i + 2), (char*)(line.text + i + len), move_len);
                 line.text[i+0] = 0xFF;
                 line.text[i+1] = t - 0x80;
                 line.next -= len - 2;
             }
             else
             {
-                strcpy((char*)(line.text + i + 1), (char*)(line.text + i + len));
+                move_len = strlen((char*)(line.text + i + len)) + 1;
+                memmove((char*)(line.text + i + 1), (char*)(line.text + i + len), move_len);
                 line.text[i+0] = t;
                 line.next -= len - 1;
             }
@@ -107,6 +114,7 @@ void tokenize(int i)
 void squeeze_blanks(int i)
 {
     int j;
+    size_t move_len;
 
     if (line.text[i] != ' ')
         return;
@@ -118,7 +126,8 @@ void squeeze_blanks(int i)
     }
     if (j > i+1)
     {
-        strcpy((char*)(line.text + i + 1), (char*)(line.text + j));
+        move_len = strlen((char*)(line.text + j)) + 1;
+        memmove((char*)(line.text + i + 1), (char*)(line.text + j), move_len);
         line.next -= j - i - 1;
     }
 }
@@ -183,11 +192,13 @@ void outbyte(FILE * out, char c)
 
 void print_usage(const char *progname)
 {
+    printf("text2bas version %s\n", TOOL_VERSION);
     printf("Usage: %s <input.bas> [output%s] [options]\n", progname, EXT);
     printf("\nOptions:\n");
     printf("  -n, --no-tokenize       Don't tokenize BASIC keywords\n");
     printf("  -s, --no-squeeze        Don't squeeze multiple blanks\n");
     printf("  -h, --help              Show this help message\n");
+    printf("  -V, --version           Show version and exit\n");
     printf("\nConverts ASCII BASIC to tokenized format for %s\n", 
 #if CGENIE
            "Colour Genie"
@@ -214,6 +225,12 @@ int main(int ac, char **av)
     /* Parse command line arguments */
     while (arg_idx < ac)
     {
+        if (strcmp(av[arg_idx], "-V") == 0 || strcmp(av[arg_idx], "--version") == 0)
+        {
+            printf("text2bas version %s\n", TOOL_VERSION);
+            return 0;
+        }
+        else
         if (strcmp(av[arg_idx], "-h") == 0 || strcmp(av[arg_idx], "--help") == 0)
         {
             print_usage(av[0]);
@@ -237,11 +254,23 @@ int main(int ac, char **av)
         }
         else if (inpfilename[0] == 0)
         {
+            if (strlen(av[arg_idx]) >= sizeof(inpfilename))
+            {
+                fprintf(stderr, "Error: Input filename too long (max %lu chars)\n",
+                        (unsigned long)(sizeof(inpfilename) - 1));
+                return 1;
+            }
             strcpy(inpfilename, av[arg_idx]);
             arg_idx++;
         }
         else if (outfilename[0] == 0)
         {
+            if (strlen(av[arg_idx]) >= sizeof(outfilename))
+            {
+                fprintf(stderr, "Error: Output filename too long (max %lu chars)\n",
+                        (unsigned long)(sizeof(outfilename) - 1));
+                return 1;
+            }
             strcpy(outfilename, av[arg_idx]);
             arg_idx++;
         }
@@ -263,18 +292,37 @@ int main(int ac, char **av)
     /* Generate output filename if not specified */
     if (outfilename[0] == 0)
     {
+        if (strlen(inpfilename) >= sizeof(outfilename))
+        {
+            fprintf(stderr, "Error: Derived output filename too long\n");
+            return 1;
+        }
         strcpy(outfilename, inpfilename);
         p = strrchr(outfilename, '.');
         if (p)
             strcpy(p, EXT);
         else
+        {
+            if (strlen(outfilename) + strlen(EXT) >= sizeof(outfilename))
+            {
+                fprintf(stderr, "Error: Derived output filename too long\n");
+                return 1;
+            }
             strcat(outfilename, EXT);
+        }
     }
 
     /* Ensure output has correct extension */
     p = strrchr(outfilename, '.');
     if (!p)
+    {
+        if (strlen(outfilename) + strlen(EXT) >= sizeof(outfilename))
+        {
+            fprintf(stderr, "Error: Output filename too long\n");
+            return 1;
+        }
         strcat(outfilename, EXT);
+    }
 
     /* Open input file */
     inp = fopen(inpfilename, "rb");

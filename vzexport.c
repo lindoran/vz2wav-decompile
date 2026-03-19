@@ -1,11 +1,26 @@
+/*
+ * vzexport - unpack a .vz container into common external representations.
+ *
+ * The tool is intentionally strict about I/O errors but permissive about
+ * output selection: callers can request one or many export formats in one run.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <ctype.h>
 
+#ifndef TOOL_VERSION
+#define TOOL_VERSION "dev"
+#endif
+
+/* 24-byte VZ header, followed by raw payload bytes. */
 #define VZ_HEADER_SIZE 24
 
+/*
+ * VZ BASIC token table used for detokenization.
+ * Index is token_byte - 0x80.
+ */
 static const char *vz_tokens[128 + 1] = {
     "END","FOR","RESET","SET","CLS","","RANDOM","NEXT",
     "DATA","INPUT","DIM","READ","LET","GOTO","RUN","IF",
@@ -83,6 +98,10 @@ static int write_ihex(const char *path, const uint8_t *data, size_t len, uint32_
 
     if (!f) return -1;
 
+    /*
+     * Emit 16-byte data records and only change type-04 extended address
+     * records when the upper 16 bits actually move.
+     */
     while (off < len) {
         uint8_t rec_len = (uint8_t)((len - off) > 16 ? 16 : (len - off));
         uint32_t addr32 = base_addr + (uint32_t)off;
@@ -124,6 +143,10 @@ static int write_srec(const char *path, const uint8_t *data, size_t len, uint32_
 
     if (!f) return -1;
 
+    /*
+     * Pick S1/S9 for 16-bit space, S2/S8 when payload spills above 64K.
+     * This keeps the output compact while still handling larger bases.
+     */
     while (off < len) {
         uint8_t rec_len = (uint8_t)((len - off) > 16 ? 16 : (len - off));
         uint32_t addr = base_addr + (uint32_t)off;
@@ -217,6 +240,11 @@ static int write_basic_text(const char *path, const uint8_t *data, size_t len, u
 
     if (!out) return -1;
 
+    /*
+     * BASIC lines are linked by absolute "next line" addresses.
+     * Follow link pointers when sane; otherwise fall back to linear scan
+     * so partially damaged payloads still produce useful text.
+     */
     while (pos + 4 <= len) {
         uint16_t next_addr = le16(data + pos);
         uint16_t line_num = le16(data + pos + 2);
@@ -271,6 +299,7 @@ static void print_info(const VzHeader *hdr, size_t payload_len)
 static void usage(const char *prog)
 {
     fprintf(stderr,
+        "vzexport version %s\n"
         "Usage: %s input.vz [options]\n"
         "\n"
         "Options:\n"
@@ -278,8 +307,9 @@ static void usage(const char *prog)
         "  --out-bin,  -b FILE     Write raw payload bytes\n"
         "  --out-hex,  -x FILE     Write Intel HEX\n"
         "  --out-srec, -s FILE     Write Motorola S-record\n"
-        "  --out-bas,  -B FILE     Detokenize BASIC to ASCII (BASIC only)\n",
-        prog);
+        "  --out-bas,  -B FILE     Detokenize BASIC to ASCII (BASIC only)\n"
+        "  --version, -V           Print version and exit\n",
+        TOOL_VERSION, prog);
 }
 
 int main(int argc, char **argv)
@@ -303,7 +333,15 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /*
+     * Keep CLI parsing "compiler-like": options can appear before/after
+     * the input file as long as exactly one positional input is provided.
+     */
     for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0) {
+            printf("vzexport version %s\n", TOOL_VERSION);
+            return 0;
+        } else
         if (strcmp(argv[i], "--info") == 0 || strcmp(argv[i], "-i") == 0) {
             want_info = 1;
         } else if ((strcmp(argv[i], "--out-bin") == 0 || strcmp(argv[i], "-b") == 0) && i + 1 < argc) {

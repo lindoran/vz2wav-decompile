@@ -45,6 +45,10 @@
 #include <stdint.h>
 #include <inttypes.h>
 
+#ifndef TOOL_VERSION
+#define TOOL_VERSION "dev"
+#endif
+
 /* -------------------------------------------------------------------------
  * Constants
  * ------------------------------------------------------------------------- */
@@ -210,6 +214,22 @@ static int write_artifact_padding(FILE *out)
     return (n == (size_t)PADDING_RAW_BYTES) ? 0 : -1;
 }
 
+static void print_usage(void)
+{
+    fprintf(stderr,
+        "vz2wav v%s - Convert VZ-200/VZ-300 tape image to WAV audio\n"
+        "Usage: vz2wav [--compat|-c] [--artifact|-a] [--robust|-r] [--gain|-g <percent>] <input.vz> <output.wav>\n"
+        "\n"
+        "  --compat,-c   Write a malformed WAV matching the original DOS program\n"
+        "                (RIFF and data size fields use raw DOS stack garbage).\n"
+        "  --artifact,-a Write the exact Borland C uninitialized stack bytes into\n"
+        "                the 80-byte padding gap instead of 0x7F silence.\n"
+        "  --robust,-r   Use longer settle/leader/sync timing for noisy analog paths.\n"
+        "  --gain,-g N   Amplitude delta in percent (range -90..300, default +10).\n"
+        "  --version,-V  Print version and exit.\n",
+        TOOL_VERSION);
+}
+
 /* -------------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------------- */
@@ -247,6 +267,13 @@ int main(int argc, char *argv[])
 
     /* Argument parsing */
     for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0) {
+            printf("vz2wav version %s\n", TOOL_VERSION);
+            return 0;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage();
+            return 0;
+        }
         if (strcmp(argv[i], "--compat") == 0 || strcmp(argv[i], "-c") == 0)
             compat_mode = 1;
         else if (strcmp(argv[i], "--artifact") == 0 || strcmp(argv[i], "-a") == 0)
@@ -276,16 +303,7 @@ int main(int argc, char *argv[])
     }
     if (!arg_input || !arg_output) {
 usage:
-        fprintf(stderr,
-            "vz2wav - Convert VZ-200/VZ-300 tape image to WAV audio\n"
-            "Usage: vz2wav [--compat|-c] [--artifact|-a] [--robust|-r] [--gain|-g <percent>] <input.vz> <output.wav>\n"
-            "\n"
-            "  --compat,-c  Write a malformed WAV matching the original DOS program\n"
-            "               (RIFF and data size fields use raw DOS stack garbage).\n"
-            "  --artifact,-a Write the exact Borland C uninitialized stack bytes into\n"
-            "               the 80-byte padding gap instead of 0x7F silence.\n"
-            "  --robust,-r  Use longer settle/leader/sync timing for noisy analog paths.\n"
-            "  --gain,-g N  Amplitude delta in percent (range -90..300, default +10).\n");
+        print_usage();
         return 1;
     }
 

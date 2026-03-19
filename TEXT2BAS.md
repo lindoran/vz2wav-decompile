@@ -137,7 +137,9 @@ This Linux port removes all Atari ST GEM dependencies:
 
 ## License
 
-Original code appeared to be public domain. This Linux port maintains that status.
+`text2bas` is third-party/inherited code and is not relicensed by this
+repository's UNLICENSE default. Treat its licensing/provenance according
+to the original distribution history and attribution below.
 
 ## Credits
 

@@ -15,6 +15,12 @@ The LLM was provided:
 Using these, we were able to rediscover the `.vz` file format and the
 exact output characteristics of the original DOS tool.
 
+Since then, the project has grown well beyond a straight reconstruction
+into a more complete CLI toolset: robust and legacy decode modes, gain
+controls, capture diagnostics, modern export/pack workflows (`vzexport`
+and `vzpack`), cross-platform targets (Linux, Win32/Win64, DOS), unified
+versioning, and install/package automation.
+
 ## Findings
 
 We discovered two bugs in the original Borland C code. Both were caused
@@ -33,6 +39,14 @@ work. The current code includes modern decoding improvements while still
 offering a legacy mode.
 
 ## Usage
+Precompiled Packages:
+Please find multiple ZIP files by platform for convenience in the
+`./dist` folder at the root of this repository.
+
+Versioning:
+
+- Tool version is sourced from the repository `VERSION` file.
+- All CLI tools support `--version` / `-V`.
 
 ### vz2wav
 
@@ -134,28 +148,69 @@ Options:
 - `--out-bas FILE`, `-B FILE`
   Detokenize BASIC payload to ASCII (only valid for BASIC type `0xF0`).
 
+### vzpack
+
+```bash
+vzpack [input] -o output.vz [options]
+```
+
+Input (exactly one):
+
+- `--in-bin FILE`, `-b FILE`
+  Pack raw binary payload into `.vz` (requires `--start`).
+
+- `--in-hex FILE`, `-x FILE`
+  Pack Intel HEX. Out-of-order records are accepted; non-contiguous ranges
+  require `--fill`.
+
+- `--in-srec FILE`, `-r FILE`
+  Pack Motorola S-record. Out-of-order records are accepted; non-contiguous
+  ranges require `--fill`.
+
+- `--in-bas FILE`, `-B FILE`
+  Tokenize ASCII BASIC and pack as BASIC `.vz`.
+
+Options:
+
+- `--out FILE`, `-o FILE`
+  Output `.vz` path.
+
+- `--name NAME`, `-n NAME`
+  Override VZ header filename (normalized/truncated to VZ limits).
+
+- `--type basic|mc|auto`, `-t basic|mc|auto`
+  Force BASIC (`0xF0`) or machine-code (`0xF1`) type. Default is `auto`.
+
+- `--start ADDR`, `-s ADDR`
+  Override start address (required for `--in-bin`; optional override for others).
+
+- `--fill BYTE`, `-f BYTE`
+  Fill byte (`0..255`, decimal/hex) used for holes when packing sparse
+  HEX/SREC address ranges.
+
 ## Current Status
 
-### wav2vz
+### MinGW Versions (Win32 and Win64)
 
-`wav2vz` is working well for both synthetic and real hardware recordings.
-The default filtered mode is intended for practical capture workflows.
-Use `--legacy` when you specifically need original-style behavior.
+The project now compiles under MinGW for both 32-bit and 64-bit Windows.
+Use `make windows`, `make windows64`, or `make windows-all`.
+Pre-compiled DOS binaries are available in the `dist` folder.
 
-### MinGW Version (Win32 console)
+Both Windows targets are supported. The 32-bit target remains useful for
+older systems/toolchains, while the 64-bit target is available for modern
+hosts. Internal WAV-size limits are still 32-bit by format definition
+(RIFF/data chunk fields), regardless of binary bitness.
 
-The project now compiles under the Win32 version of MinGW. Being a
-console application, it should continue to work even if a 64-bit build
-is ever required. Pre-compiled DOS binaries are available in the `dist`
-folder.
+### Install target (Linux)
 
-We target 32-bit Windows because the maximum RIFF file size is 32 bits
-(2 GB). Even if a `.vz` file attempted to load a full 64K of address
-space (unlikely, but allowed by the format), the resulting WAV file
-would still remain within this limit. 32-bit application support is not
-in danger of removal at this time. If someone needs a 64-bit build, the
-change is trivial — but the internal limits will remain 32-bit due to
-the WAV format.
+```bash
+make install
+```
+
+Optional overrides:
+
+- `PREFIX=/opt/vz2wav`
+- `DESTDIR=/tmp/vz2wav-pkg` (staged/package install)
 
 ### gcc-ia16-elf
 
@@ -178,37 +233,23 @@ last line of a file if there was no terminated CR/LF or CR.
 
 ## TODO
 
-### Near-term tooling
+Roadmap and outstanding work items now live in:
 
-- Build a true single front-end command that auto-detects input type and
-  dispatches to the right conversion path (today this is split across
-  `text2bas`, `vz2wav`, `wav2vz`, and `vzexport`).
-- Add direct binary-to-`.vz` support for machine-code files (`VZFO` /
-  `0xF1`) with explicit start-address control.
-- Add `.cas` and additional output pathways to `vzexport` where practical.
-- Extend BASIC detokenization output quality (formatting, edge-case tokens,
-  and comments/strings fidelity checks).
-- Add more end-to-end fixtures (BASIC and machine-code) for round-trip tests
-  across Linux/Windows/ia16 builds.
-
-### Signal path options
-
-- Add optional waveform inversion controls for encode/decode paths.
-- Add optional square-wave output profile in `vz2wav` for compatibility
-  experiments on difficult analog/emulator setups.
-
-### Long-term goals
-
-- Fully document the VZ200 BASIC ROM
-- Reverse-engineer the tape routines
-- Build a fast loader
-- Produce fast-load output similar to the ZX Spectrum or the “2018AD”
-  loader
-
-This may require repacking data and designing a custom loader, but it is
-entirely achievable.
+- `TODO.md`
 
 ## License
 
-Unless stated otherwise, code here is public domain, as-is, and used at
-your own risk as of 2026. No liability is implied.
+Repository-default license for original project contributions is the
+UNLICENSE (public domain dedication), see:
+
+- `UNLICENSE`
+- `NOTICE`
+
+Scope clarification:
+
+- This dedication applies only to rights held by this repository's
+  contributors.
+- Third-party/inherited components (notably `text2bas.c` and
+  `AtariST_Version_SRC/`) keep their own provenance/licensing status as
+  documented in `TEXT2BAS.md`.
+- This project is provided as-is, without warranty.

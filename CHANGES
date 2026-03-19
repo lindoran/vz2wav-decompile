@@ -1,0 +1,54 @@
+V1.0
+feat(toolchain): expand VZ CLI suite, packaging, docs, and reliability hardening
+
+- Added cross-platform build improvements:
+  - new `windows64` target (MinGW x86_64)
+  - new `windows-all` convenience target (32-bit + 64-bit)
+  - updated `build-all`/`package-all` to include Win64
+  - improved help/BUILD docs to match current targets
+
+- Added install/uninstall workflow:
+  - `make install` / `make uninstall`
+  - supports `PREFIX` and `DESTDIR`
+  - installs binaries + project docs
+  - avoids forcing package generation during install
+
+- Centralized versioning:
+  - added top-level `VERSION` (set to `1.0`)
+  - Makefile injects `TOOL_VERSION` into all binaries
+  - all tools now support `--version` / `-V`
+  - usage/help text updated accordingly
+
+- Expanded `vzpack` capabilities:
+  - accepts out-of-order Intel HEX / SREC records
+  - detects sparse ranges and requires explicit `--fill/-f` to pack holes
+  - keeps overlap/conflict checks strict
+  - improved diagnostics/output summaries
+
+- Updated roadmap/docs organization:
+  - moved TODO section into dedicated `TODO.md`
+  - linked TODO from README
+  - added roadmap items for `.cvz` support and a third disk-format tool (`vzdisk`, working name)
+
+- Licensing/provenance cleanup:
+  - added `UNLICENSE` and `NOTICE`
+  - clarified scope for third-party/inherited code in README/TEXT2BAS docs
+  - added explicit provenance wording for reverse-engineered origins
+  - included `UNLICENSE`/`NOTICE` in package/install doc staging
+
+- Documentation refresh:
+  - README intro now frames project as a complete CLI toolset
+  - removed redundant status text
+  - aligned BUILD/README with current commands and behavior
+
+- Reliability and memory-safety fixes:
+  - fixed overlapping-copy UB (`strcpy` -> `memmove`) in tokenization/squeeze paths
+    in `text2bas` and `vzpack`
+  - added bounds checks for `text2bas` filename handling
+  - fixed partial-allocation cleanup path in `vzpack` addrmap init
+
+- Validation:
+  - completed end-to-end round-trip checks across:
+    `text2bas -> vz2wav -> wav2vz -> vzexport -> vzpack`
+  - payloads match across bin/hex/srec/bas repack paths
+  - sanitizer runs (ASan/UBSan) completed clean in this environment
