@@ -95,7 +95,7 @@ Options:
 
 - `--gain <percent>`, `-g <percent>`
   Signed input gain delta around center before classification.
-  Default is `+10`.
+  Default is `0`.
 
 - `--analyze`, `-a`
   Analyze-only mode (no `.vz` output). Prints capture diagnostics such as
