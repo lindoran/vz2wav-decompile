@@ -51,10 +51,33 @@ Versioning:
 ### vz2wav
 
 ```bash
-vz2wav [--compat|-c] [--artifact|-a] [--robust|-r] [--gain|-g <percent>] input.vz output.wav
+vz2wav [options] input.vz output.wav
 ```
 
 Options:
+
+- `--fast`, `-f`
+  Emit 2018AD speedload audio with a self-booting bootstrap stub (~12.5x speed).
+  Stage 1 loads a compact 150-byte machine code receiver via standard VZ ROM
+  `SYSTEM` or `CRUN` / `CLOAD`, which immediately receives the payload at
+  ~7,350 baud, relocates it to its target address, and auto-executes (RUN for BASIC,
+  or direct JP for machine code).
+
+- `--fast-raw`
+  Emit raw 2018AD speedload audio block without the standard bootstrap stub.
+  Useful for custom loaders and demos that already have the fast receiver in RAM.
+
+- `--waveform <dos|square|sine>`, `-w <dos|square|sine>`
+  Select the waveform profile:
+  - `dos` (default): Exact Borland C DOS waveform table for byte-accurate compatibility.
+  - `square` (or `--square`): Clean digital square wave (`195` high, `61` low).
+  - `sine` (or `--sine`, `--sin`): Clean synthesized sine wave.
+
+- `--square`
+  Convenience shorthand for `--waveform square`.
+
+- `--sine`, `--sin`
+  Convenience shorthand for `--waveform sine`.
 
 - `--compat`, `-c`
   Produce a malformed WAV file that matches the DOS original exactly.

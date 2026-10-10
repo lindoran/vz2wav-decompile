@@ -601,6 +601,171 @@ static uint8_t ReadVZbyte(void)
  * platform) before truncation to uint16_t, avoiding implementation-
  * defined behaviour on narrow shift operations.
  * ----------------------------------------------------------------------- */
+/* -----------------------------------------------------------------------
+ * 2018AD Speedloader Decoding Support (~12.5x speed)
+ * ----------------------------------------------------------------------- */
+
+typedef struct {
+    uint8_t  file_type;
+    uint16_t start_addr;
+    uint16_t data_size;
+    uint8_t *payload;
+} FastBlock;
+
+/*
+ * Reads sample from g_wav applying gain and Schmitt trigger center logic.
+ * Returns 1 for high (>= center) or 0 for low (< center).
+ */
+static int fast_sample_state(int c)
+{
+    unsigned uc = (unsigned)c;
+    int gain_num = 100 + g_input_gain_percent;
+    int centered = (int)uc - (int)LOGIC_CENTER;
+    int scaled = (int)LOGIC_CENTER + (centered * gain_num) / 100;
+    if (scaled < 0) scaled = 0;
+    if (scaled > 255) scaled = 255;
+    return (scaled >= (int)LOGIC_CENTER) ? 1 : 0;
+}
+
+/*
+ * Scans the remainder of g_wav looking for a 2018AD speedload block.
+ * Sync pattern: >= 60 consecutive short cycles (0) followed by 1 long cycle (1).
+ * Then reads 1 byte file_type, 2 bytes start_addr, 2 bytes length, and payload.
+ * Returns 1 on success (block allocated in out_block), 0 if no fast block found.
+ */
+static int decode_fast_speedload_block(FastBlock *out_block)
+{
+    long start_pos = ftell(g_wav);
+    int c;
+    int short_streak = 0;
+    int sync_found = 0;
+
+    /* Cycle detector state */
+    while ((c = fgetc(g_wav)) != EOF) {
+        int lo_count = 0;
+        int hi_count = 0;
+
+        /* Advance to low sample */
+        while (fast_sample_state(c) != 0) {
+            c = fgetc(g_wav);
+            if (c == EOF) goto fail;
+        }
+
+        /* Count low samples */
+        while (fast_sample_state(c) == 0) {
+            lo_count++;
+            c = fgetc(g_wav);
+            if (c == EOF) goto fail;
+        }
+
+        /* Count high samples (c is already high) */
+        while (fast_sample_state(c) != 0) {
+            hi_count++;
+            c = fgetc(g_wav);
+            if (c == EOF) break;
+        }
+        if (c != EOF) {
+            ungetc(c, g_wav);
+        }
+
+        int cycle_len = lo_count + hi_count;
+
+        /* Classify cycle: nominal short is 4 samples (range 2..5), long is 8 (range 6..11) */
+        if (cycle_len >= 2 && cycle_len <= 5) {
+            short_streak++;
+        } else if (cycle_len >= 6 && cycle_len <= 11) {
+            if (short_streak >= 60) {
+                sync_found = 1;
+                break;
+            }
+            short_streak = 0;
+        } else {
+            short_streak = 0;
+        }
+    }
+
+    if (!sync_found)
+        goto fail;
+
+    /*
+     * We have synchronized to the end of the sync sequence.
+     * The next cycles encode the fast header and payload:
+     * MSB first. Short cycle = 0, long cycle = 1.
+     */
+    {
+        uint8_t hdr_bytes[5];
+        int b_idx, bit_i;
+        uint16_t payload_len;
+        uint8_t *payload_buf = NULL;
+
+        for (b_idx = 0; b_idx < 5; b_idx++) {
+            uint8_t val = 0;
+            for (bit_i = 0; bit_i < 8; bit_i++) {
+                int lo_count = 0, hi_count = 0;
+                while ((c = fgetc(g_wav)) != EOF && fast_sample_state(c) != 0) {}
+                if (c == EOF) goto fail;
+                while (fast_sample_state(c) == 0) {
+                    lo_count++;
+                    c = fgetc(g_wav);
+                    if (c == EOF) goto fail;
+                }
+                while (fast_sample_state(c) != 0) {
+                    hi_count++;
+                    c = fgetc(g_wav);
+                    if (c == EOF) break;
+                }
+                if (c != EOF) ungetc(c, g_wav);
+
+                int tot = lo_count + hi_count;
+                int bit = (tot >= 6) ? 1 : 0;
+                val = (uint8_t)((val << 1) | bit);
+            }
+            hdr_bytes[b_idx] = val;
+        }
+
+        out_block->file_type  = hdr_bytes[0];
+        out_block->start_addr = (uint16_t)(hdr_bytes[1] | (hdr_bytes[2] << 8));
+        payload_len           = (uint16_t)(hdr_bytes[3] | (hdr_bytes[4] << 8));
+        out_block->data_size  = payload_len;
+
+        payload_buf = (uint8_t *)malloc((size_t)payload_len);
+        if (!payload_buf) goto fail;
+
+        for (b_idx = 0; b_idx < (int)payload_len; b_idx++) {
+            uint8_t val = 0;
+            for (bit_i = 0; bit_i < 8; bit_i++) {
+                int lo_count = 0, hi_count = 0;
+                while ((c = fgetc(g_wav)) != EOF && fast_sample_state(c) != 0) {}
+                if (c == EOF) { free(payload_buf); goto fail; }
+                while (fast_sample_state(c) == 0) {
+                    lo_count++;
+                    c = fgetc(g_wav);
+                    if (c == EOF) { free(payload_buf); goto fail; }
+                }
+                while (fast_sample_state(c) != 0) {
+                    hi_count++;
+                    c = fgetc(g_wav);
+                    if (c == EOF) break;
+                }
+                if (c != EOF) ungetc(c, g_wav);
+
+                int tot = lo_count + hi_count;
+                int bit = (tot >= 6) ? 1 : 0;
+                val = (uint8_t)((val << 1) | bit);
+            }
+            payload_buf[b_idx] = val;
+        }
+
+        out_block->payload = payload_buf;
+        return 1;
+    }
+
+fail:
+    if (start_pos >= 0)
+        fseek(g_wav, start_pos, SEEK_SET);
+    return 0;
+}
+
 static uint16_t read_u16_le(void)
 {
     unsigned lo = (unsigned)ReadVZbyte();
@@ -750,7 +915,7 @@ int main(int argc, char *argv[])
     /* silently exit the loop on a truncated file -- the int check stops   */
     /* this.                                                                */
     /* ------------------------------------------------------------------ */
-    printf("Searching for signal..");
+    printf("Searching for signal..\n");
     fflush(stdout);
 
     do {
@@ -761,9 +926,52 @@ int main(int argc, char *argv[])
 
     printf("OK!\n");
 
-    /* ------------------------------------------------------------------ */
-    /* Sync to leader: decode bytes until TAPE_START_BYTE (0x80)           */
-    /* ------------------------------------------------------------------ */
+    // Attempt fast speedloader decoding before standard leader processing
+    FastBlock fastBlock;
+    if (decode_fast_speedload_block(&fastBlock)) {
+        printf("Fast loader block detected. Decoding...\n");
+        // Build VZ header from fast block
+        memset(&vz_hdr, 0, sizeof(vz_hdr));
+        vz_hdr.magic[0] = (uint8_t)'V';
+        vz_hdr.magic[1] = (uint8_t)'Z';
+        vz_hdr.magic[2] = (uint8_t)'F';
+        vz_hdr.magic[3] = (fastBlock.file_type == 0xF0u) ? (uint8_t)'0' : (uint8_t)'O';
+        // No filename stored; leave empty
+        memset(vz_hdr.filename, 0, sizeof(vz_hdr.filename));
+        vz_hdr.file_type = fastBlock.file_type;
+        vz_hdr.start_addr = fastBlock.start_addr;
+        if (fwrite(&vz_hdr, sizeof(VzHeader), 1u, g_vz) != 1u)
+            fatal("error writing VZ header (fast)");
+        // Compute checksum (start + end + payload)
+        uint16_t end_addr = (uint16_t)(fastBlock.start_addr + fastBlock.data_size);
+        uint16_t checksum_calc = (uint16_t)(
+            (fastBlock.start_addr & 0x00FFu) +
+            ((fastBlock.start_addr >> 8) & 0x00FFu) +
+            (end_addr & 0x00FFu) +
+            ((end_addr >> 8) & 0x00FFu)
+        );
+        // Write payload and update checksum
+        for (uint16_t i = 0; i < fastBlock.data_size; i++) {
+            uint8_t b = fastBlock.payload[i];
+            checksum_calc = (uint16_t)(checksum_calc + b);
+            if (fwrite(&b, 1u, 1u, g_vz) != 1u)
+                fatal("error writing data byte (fast)");
+        }
+        // Write checksum little-endian
+        uint8_t lo = (uint8_t)(checksum_calc & 0xFFu);
+        uint8_t hi = (uint8_t)((checksum_calc >> 8) & 0xFFu);
+        if (fwrite(&lo, 1u, 1u, g_vz) != 1u || fwrite(&hi, 1u, 1u, g_vz) != 1u)
+            fatal("error writing checksum (fast)");
+        free(fastBlock.payload);
+        fclose(g_wav);
+        fclose(g_vz);
+        printf("Fast block decoding completed.\n");
+        return 0;
+    }
+
+    // ------------------------------------------------------------------
+    // Sync to leader: decode bytes until TAPE_START_BYTE (0x80)
+    // ------------------------------------------------------------------
     printf("Synching to leader.....");
     fflush(stdout);
 

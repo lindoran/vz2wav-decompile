@@ -40,14 +40,16 @@
 ## Signal path options
 
 - Add optional waveform inversion controls for encode/decode paths.
-- Add optional square-wave output profile in `vz2wav` for compatibility
+- [x] Add optional square-wave and sine-wave output profiles in `vz2wav`
+  (`--waveform <dos|square|sine>`, `--square`, `--sine`) for compatibility
   experiments on difficult analog/emulator setups.
 
 ## Long-term goals
 
 - Fully document the VZ200 BASIC ROM.
 - Reverse-engineer the tape routines.
-- Build a fast loader.
+- [x] Build a fast loader (integrated Five Finger Punch 2018AD protocol into `vz2wav`
+  via `--fast` self-booting hybrid WAV and `--fast-raw`).
 - Produce fast-load output similar to the ZX Spectrum or the "2018AD" loader.
 
 This may require repacking data and designing a custom loader, but it is

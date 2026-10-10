@@ -76,22 +76,97 @@
 
 static int g_output_gain_percent = DEFAULT_GAIN_PERCENT;
 
+typedef enum {
+    WAVEFORM_DOS = 0,
+    WAVEFORM_SQUARE,
+    WAVEFORM_SINE
+} WaveformMode;
+
+static WaveformMode g_waveform_mode = WAVEFORM_DOS;
+
 /* -------------------------------------------------------------------------
- * Bit waveform tables  (exact values from the DOS binary)
+ * Bit waveform tables
  * ------------------------------------------------------------------------- */
 
-static const unsigned char BIT1_WAVE[SAMPLES_PER_BIT] = {
+/* Exact values from the DOS binary */
+static const unsigned char BIT1_WAVE_DOS[SAMPLES_PER_BIT] = {
     156, 178, 189, 191, 195, 179, 118,  88,  75,  70,
      70,  67, 110, 163, 180, 190, 190, 195, 168, 108,
      84,  73,  69,  69,  68, 117, 165, 181, 190, 190,
     195, 161, 104,  83,  72,  69,  67,  72
 };
 
-static const unsigned char BIT0_WAVE[SAMPLES_PER_BIT] = {
+static const unsigned char BIT0_WAVE_DOS[SAMPLES_PER_BIT] = {
     165, 181, 190, 190, 195, 161, 104,  83,  72,  69,
      67,  72, 129, 169, 183, 190, 192, 192, 191, 191,
     189, 189, 186, 189, 157,  98,  76,  65,  62,  61,
      61,  62,  63,  64,  64,  67,  65, 106
+};
+
+/* Clean square wave (high = 195, low = 61, centered around 127) */
+static const unsigned char BIT1_WAVE_SQUARE[SAMPLES_PER_BIT] = {
+    195, 195, 195, 195, 195, 195,  61,  61,  61,  61,
+     61,  61,  61, 195, 195, 195, 195, 195, 195,  61,
+     61,  61,  61,  61,  61,  61, 195, 195, 195, 195,
+    195, 195,  61,  61,  61,  61,  61,  61
+};
+
+static const unsigned char BIT0_WAVE_SQUARE[SAMPLES_PER_BIT] = {
+    195, 195, 195, 195, 195, 195,  61,  61,  61,  61,
+     61,  61, 195, 195, 195, 195, 195, 195, 195, 195,
+    195, 195, 195, 195, 195,  61,  61,  61,  61,  61,
+     61,  61,  61,  61,  61,  61,  61,  61
+};
+
+/* Clean sine wave (amplitude 68, peak values 195 / 59, centered around 127) */
+static const unsigned char BIT1_WAVE_SINE[SAMPLES_PER_BIT] = {
+    143, 172, 191, 195, 183, 159, 127,  95,  71,  59,
+     63,  82, 111, 143, 172, 191, 195, 183, 159, 127,
+     95,  71,  59,  63,  82, 111, 145, 175, 193, 193,
+    175, 145, 109,  79,  61,  61,  79, 109
+};
+
+static const unsigned char BIT0_WAVE_SINE[SAMPLES_PER_BIT] = {
+    145, 175, 193, 193, 175, 145, 109,  79,  61,  61,
+     79, 109, 135, 151, 166, 178, 187, 193, 195, 193,
+    187, 178, 166, 151, 135, 119, 103,  88,  76,  67,
+     61,  59,  61,  67,  76,  88, 103, 119
+};
+
+/* -------------------------------------------------------------------------
+ * Fast loader bootstrap stub (Five Finger Punch 2018AD protocol)
+ * ------------------------------------------------------------------------- */
+
+#define FAST_BOOT_STUB_LOAD_ADDR    0x7AE9
+#define FAST_SYNC_BYTE_COUNT        7
+#define FAST_INTERSTAGE_GAP_SAMPLES 11025   /* 0.5 sec silence between stub and fast data */
+
+/*
+ * Z80 machine code bootstrap receiver (150 bytes, assembled to run at 0x7AE9).
+ * - Disables interrupts, configures SP, sets IY=0x6800, D=26 (pulse threshold)
+ * - Synchronizes on 60 short pulses, followed by the sync end (long pulse)
+ * - Reads 1-byte file_type (0xF0=BASIC, 0xF1=MC)
+ * - Reads 2-byte start address (little endian)
+ * - Reads 2-byte length (little endian)
+ * - Loops reading bytes at high speed (~7,350 baud) directly into destination RAM
+ * - Updates system variables (0x78F9 end address, 0x78A4 PRGEND if BASIC)
+ * - If BASIC: calls RENEW_LINE_PTRS (0x1AFC), VRESET (0x1B5D), and executes RUN (0x1A81)
+ * - If MC: enables interrupts and jumps directly to start address
+ */
+static const uint8_t FAST_BOOT_STUB[150] = {
+    0xF3, 0x31, 0xFF, 0x7F, 0xFD, 0x21, 0x00, 0x68, 0x16, 0x1A, 0x1E, 0x3C,
+    0xAF, 0x3C, 0xFD, 0xCB, 0x00, 0x76, 0x20, 0xF9, 0x3C, 0xFD, 0xCB, 0x00,
+    0x76, 0x28, 0xF9, 0xBA, 0x30, 0xEC, 0x1D, 0x20, 0xEB, 0xAF, 0x3C, 0xFD,
+    0xCB, 0x00, 0x76, 0x20, 0xF9, 0x3C, 0xFD, 0xCB, 0x00, 0x76, 0x28, 0xF9,
+    0xBA, 0x38, 0xEE, 0xCD, 0x67, 0x7B, 0x7B, 0xF5, 0xCD, 0x67, 0x7B, 0x6B,
+    0xCD, 0x67, 0x7B, 0x63, 0xE5, 0xCD, 0x67, 0x7B, 0x4B, 0xCD, 0x67, 0x7B,
+    0x43, 0xC5, 0xCD, 0x67, 0x7B, 0x73, 0x23, 0x0B, 0x78, 0xB1, 0x20, 0xF6,
+    0xC1, 0xD1, 0xD5, 0x62, 0x6B, 0x09, 0x22, 0xF9, 0x78, 0xE1, 0xF1, 0xFE,
+    0xF1, 0x28, 0x19, 0x22, 0xA4, 0x78, 0xCD, 0xFC, 0x1A, 0xCD, 0x5D, 0x1B,
+    0xFB, 0x21, 0xE8, 0x79, 0x36, 0x96, 0x23, 0x36, 0x00, 0x21, 0xE7, 0x79,
+    0xAF, 0xC3, 0x81, 0x1A, 0xFB, 0xE9, 0x1E, 0x01, 0xAF, 0x3C, 0xFD, 0xCB,
+    0x00, 0x76, 0x20, 0xF9, 0x3C, 0xFD, 0xCB, 0x00, 0x76, 0x28, 0xF9, 0xBA,
+    0x3F, 0xCB, 0x13, 0x30, 0xEB, 0xC9
 };
 
 /* -------------------------------------------------------------------------
@@ -161,8 +236,21 @@ static void build_wav_header(unsigned char hdr[44], uint32_t data_bytes, int com
 static int write_bit(FILE *out, int bit)
 {
     int i;
-    const unsigned char *src = bit ? BIT1_WAVE : BIT0_WAVE;
+    const unsigned char *src;
     int gain_num = 100 + g_output_gain_percent;
+
+    switch (g_waveform_mode) {
+    case WAVEFORM_SQUARE:
+        src = bit ? BIT1_WAVE_SQUARE : BIT0_WAVE_SQUARE;
+        break;
+    case WAVEFORM_SINE:
+        src = bit ? BIT1_WAVE_SINE : BIT0_WAVE_SINE;
+        break;
+    case WAVEFORM_DOS:
+    default:
+        src = bit ? BIT1_WAVE_DOS : BIT0_WAVE_DOS;
+        break;
+    }
 
     for (i = 0; i < SAMPLES_PER_BIT; i++) {
         int centered = (int)src[i] - SIGNAL_CENTER;
@@ -190,12 +278,72 @@ static int parse_gain_percent(const char *s, int *out)
     return 0;
 }
 
+static int parse_waveform_mode(const char *s, WaveformMode *out)
+{
+    if (!s || !*s)
+        return -1;
+    if (strcmp(s, "dos") == 0 || strcmp(s, "default") == 0) {
+        *out = WAVEFORM_DOS;
+        return 0;
+    }
+    if (strcmp(s, "square") == 0 || strcmp(s, "sq") == 0) {
+        *out = WAVEFORM_SQUARE;
+        return 0;
+    }
+    if (strcmp(s, "sine") == 0 || strcmp(s, "sin") == 0) {
+        *out = WAVEFORM_SINE;
+        return 0;
+    }
+    return -1;
+}
+
 static int write_vz_byte(FILE *out, unsigned char val)
 {
     int i;
     for (i = 7; i >= 0; i--)
         if (write_bit(out, (val >> i) & 1) < 0)
             return -1;
+    return 0;
+}
+
+static int write_fast_bit(FILE *out, int bit)
+{
+    /*
+     * 2018AD protocol at 22050 Hz:
+     * Bit 0 (short): 2 low samples (61), 2 high samples (195) = 4 samples
+     * Bit 1 (long) : 4 low samples (61), 4 high samples (195) = 8 samples
+     * Respects g_output_gain_percent around SIGNAL_CENTER (127).
+     */
+    int half_samples = bit ? 4 : 2;
+    int gain_num = 100 + g_output_gain_percent;
+    int lo_val, hi_val;
+    int i;
+
+    int lo_c = (int)61 - SIGNAL_CENTER;
+    int hi_c = (int)195 - SIGNAL_CENTER;
+    lo_val = SIGNAL_CENTER + (lo_c * gain_num) / 100;
+    hi_val = SIGNAL_CENTER + (hi_c * gain_num) / 100;
+    if (lo_val < 0) lo_val = 0;
+    if (lo_val > 255) lo_val = 255;
+    if (hi_val < 0) hi_val = 0;
+    if (hi_val > 255) hi_val = 255;
+
+    for (i = 0; i < half_samples; i++) {
+        if (fputc((unsigned char)lo_val, out) == EOF) return -1;
+    }
+    for (i = 0; i < half_samples; i++) {
+        if (fputc((unsigned char)hi_val, out) == EOF) return -1;
+    }
+    return 0;
+}
+
+static int write_fast_byte(FILE *out, unsigned char val)
+{
+    int i;
+    for (i = 7; i >= 0; i--) {
+        if (write_fast_bit(out, (val >> i) & 1) < 0)
+            return -1;
+    }
     return 0;
 }
 
@@ -218,8 +366,15 @@ static void print_usage(void)
 {
     fprintf(stderr,
         "vz2wav v%s - Convert VZ-200/VZ-300 tape image to WAV audio\n"
-        "Usage: vz2wav [--compat|-c] [--artifact|-a] [--robust|-r] [--gain|-g <percent>] <input.vz> <output.wav>\n"
+        "Usage: vz2wav [options] <input.vz> <output.wav>\n"
         "\n"
+        "Options:\n"
+        "  --waveform,-w <dos|square|sine>\n"
+        "                Select waveform profile (default: dos).\n"
+        "  --square      Shorthand for --waveform square (clean square wave).\n"
+        "  --sine,--sin  Shorthand for --waveform sine (clean sine wave).\n"
+        "  --fast,-f     Emit 2018AD speedload audio with self-booting stub (~12.5x speed).\n"
+        "  --fast-raw    Emit raw 2018AD speedload audio block without bootstrap stub.\n"
         "  --compat,-c   Write a malformed WAV matching the original DOS program\n"
         "                (RIFF and data size fields use raw DOS stack garbage).\n"
         "  --artifact,-a Write the exact Borland C uninitialized stack bytes into\n"
@@ -241,6 +396,7 @@ int main(int argc, char *argv[])
     int            compat_mode   = 0;
     int            artifact_mode = 0;
     int            robust_mode   = 0;
+    int            fast_mode     = 0;  /* 1 = self-booting two-stage fast WAV, 2 = raw fast block */
 
     FILE          *fin  = NULL;
     FILE          *fout = NULL;
@@ -280,6 +436,10 @@ int main(int argc, char *argv[])
             artifact_mode = 1;
         else if (strcmp(argv[i], "--robust") == 0 || strcmp(argv[i], "-r") == 0)
             robust_mode = 1;
+        else if (strcmp(argv[i], "--fast") == 0 || strcmp(argv[i], "-f") == 0)
+            fast_mode = 1;
+        else if (strcmp(argv[i], "--fast-raw") == 0)
+            fast_mode = 2;
         else if (strcmp(argv[i], "--gain") == 0 || strcmp(argv[i], "-g") == 0) {
             if (i + 1 >= argc || parse_gain_percent(argv[++i], &g_output_gain_percent) != 0) {
                 fprintf(stderr, "vz2wav: invalid --gain value\n");
@@ -291,6 +451,24 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "vz2wav: invalid --gain value\n");
                 goto usage;
             }
+        }
+        else if (strcmp(argv[i], "--waveform") == 0 || strcmp(argv[i], "-w") == 0) {
+            if (i + 1 >= argc || parse_waveform_mode(argv[++i], &g_waveform_mode) != 0) {
+                fprintf(stderr, "vz2wav: invalid --waveform value (must be dos, square, or sine)\n");
+                goto usage;
+            }
+        }
+        else if (strncmp(argv[i], "--waveform=", 11) == 0) {
+            if (parse_waveform_mode(argv[i] + 11, &g_waveform_mode) != 0) {
+                fprintf(stderr, "vz2wav: invalid --waveform value (must be dos, square, or sine)\n");
+                goto usage;
+            }
+        }
+        else if (strcmp(argv[i], "--square") == 0) {
+            g_waveform_mode = WAVEFORM_SQUARE;
+        }
+        else if (strcmp(argv[i], "--sine") == 0 || strcmp(argv[i], "--sin") == 0) {
+            g_waveform_mode = WAVEFORM_SINE;
         }
         else if (!arg_input)
             arg_input = argv[i];
@@ -308,10 +486,12 @@ usage:
     }
 
     printf("\nvz2wav - VZ tape image to WAV converter\n");
-    printf("Mode: %s%s%s\n\n",
+    printf("Mode: %s%s%s(%s wave)\n\n",
            compat_mode   ? "compat (malformed WAV header) " : "clean  (standards WAV header) ",
            artifact_mode ? "+ artifact padding "            : "",
-           robust_mode   ? "+ robust timing"                : "");
+           robust_mode   ? "+ robust timing "               : "",
+           g_waveform_mode == WAVEFORM_SQUARE ? "square" :
+           g_waveform_mode == WAVEFORM_SINE   ? "sine" : "DOS");
 
     pre_silence_samples  = robust_mode ? (uint32_t)ROBUST_PRE_SILENCE_SAMPLES  : (uint32_t)SILENCE_SAMPLES;
     post_silence_samples = robust_mode ? (uint32_t)ROBUST_POST_SILENCE_SAMPLES : (uint32_t)SILENCE_SAMPLES;
@@ -414,19 +594,88 @@ usage:
     printf("  End addr  : 0x%04" PRIX16 "\n", end_addr);
     printf("  Checksum  : 0x%02" PRIX8 "%02" PRIX8 "\n\n", cksum_hi, cksum_lo);
 
-    /* Total samples */
-    total_samples =
-        pre_silence_samples
-      + leader_count           * 8 * SAMPLES_PER_BIT
-      + sync_count             * 8 * SAMPLES_PER_BIT
-      + (uint32_t)1            * 8 * SAMPLES_PER_BIT
-      + fn_write_len           * 8 * SAMPLES_PER_BIT
-      + (uint32_t)PADDING_RAW_BYTES
-      + (uint32_t)4            * 8 * SAMPLES_PER_BIT
-      + body_len               * 8 * SAMPLES_PER_BIT
-      + (uint32_t)2            * 8 * SAMPLES_PER_BIT
-      + (compat_mode ? 0u : ((uint32_t)1 * 8u * (uint32_t)SAMPLES_PER_BIT))
-      + post_silence_samples;
+    /*
+     * For fast_mode, compute exact sample count of the fast payload.
+     * Header bytes: 1 byte file_type, 2 bytes addr, 2 bytes body_len.
+     * In 2018AD speedload, bit 0 is 4 samples, bit 1 is 8 samples.
+     */
+    uint32_t fast_data_len_samples = 0;
+    if (fast_mode != 0) {
+        uint8_t fast_hdr[5];
+        uint32_t b_idx;
+        int bit_idx;
+
+        fast_hdr[0] = file_type;
+        fast_hdr[1] = addr_lo;
+        fast_hdr[2] = addr_hi;
+        fast_hdr[3] = (uint8_t)(body_len & 0xFF);
+        fast_hdr[4] = (uint8_t)((body_len >> 8) & 0xFF);
+
+        for (b_idx = 0; b_idx < 5; b_idx++) {
+            for (bit_idx = 0; bit_idx < 8; bit_idx++) {
+                int bit = (fast_hdr[b_idx] >> (7 - bit_idx)) & 1;
+                fast_data_len_samples += bit ? 8u : 4u;
+            }
+        }
+        for (b_idx = 0; b_idx < body_len; b_idx++) {
+            for (bit_idx = 0; bit_idx < 8; bit_idx++) {
+                int bit = (body[b_idx] >> (7 - bit_idx)) & 1;
+                fast_data_len_samples += bit ? 8u : 4u;
+            }
+        }
+    }
+
+    /* Compute total samples depending on fast_mode */
+    if (fast_mode == 2) {
+        /* Raw speedload block only */
+        total_samples =
+            pre_silence_samples
+          + (uint32_t)FAST_SYNC_BYTE_COUNT * 8u * 4u   /* 7 bytes of 0x00 */
+          + (7u * 4u + 1u * 8u)                        /* 1 byte of 0x01 */
+          + (uint32_t)fast_data_len_samples
+          + 4u                                         /* trailing leadout bit */
+          + post_silence_samples;
+    } else if (fast_mode == 1) {
+        /*
+         * Self-booting hybrid WAV:
+         * Stage 1: Standard ROM tape encoding of the 150-byte FAST_BOOT_STUB
+         *          (Machine Code 0xF1, load address 0x7AE9, end 0x7B7F)
+         * Stage 2: 0.5s interstage silence gap
+         * Stage 3: Speedload block containing the actual file payload
+         */
+        uint32_t stage1_body_len = sizeof(FAST_BOOT_STUB);
+        total_samples =
+            pre_silence_samples
+          + leader_count           * 8 * SAMPLES_PER_BIT
+          + sync_count             * 8 * SAMPLES_PER_BIT
+          + (uint32_t)1            * 8 * SAMPLES_PER_BIT   /* type 0xF1 */
+          + fn_write_len           * 8 * SAMPLES_PER_BIT   /* filename */
+          + (uint32_t)PADDING_RAW_BYTES                    /* gap */
+          + (uint32_t)4            * 8 * SAMPLES_PER_BIT   /* addresses */
+          + stage1_body_len        * 8 * SAMPLES_PER_BIT   /* stub body */
+          + (uint32_t)2            * 8 * SAMPLES_PER_BIT   /* checksum */
+          + ((uint32_t)1           * 8 * SAMPLES_PER_BIT)  /* post cksum guard */
+          + (uint32_t)FAST_INTERSTAGE_GAP_SAMPLES          /* interstage gap */
+          + (uint32_t)FAST_SYNC_BYTE_COUNT * 8u * 4u       /* fast sync 7x 0x00 */
+          + (7u * 4u + 1u * 8u)                            /* fast sync 0x01 */
+          + (uint32_t)fast_data_len_samples                /* fast header + body */
+          + 4u                                             /* trailing leadout bit */
+          + post_silence_samples;
+    } else {
+        /* Standard VZ tape encoding */
+        total_samples =
+            pre_silence_samples
+          + leader_count           * 8 * SAMPLES_PER_BIT
+          + sync_count             * 8 * SAMPLES_PER_BIT
+          + (uint32_t)1            * 8 * SAMPLES_PER_BIT
+          + fn_write_len           * 8 * SAMPLES_PER_BIT
+          + (uint32_t)PADDING_RAW_BYTES
+          + (uint32_t)4            * 8 * SAMPLES_PER_BIT
+          + body_len               * 8 * SAMPLES_PER_BIT
+          + (uint32_t)2            * 8 * SAMPLES_PER_BIT
+          + (compat_mode ? 0u : ((uint32_t)1 * 8u * (uint32_t)SAMPLES_PER_BIT))
+          + post_silence_samples;
+    }
 
     /* Open output */
     fout = fopen(arg_output, "wb");
@@ -442,53 +691,136 @@ usage:
     /* Pre-silence */
     if (write_raw(fout, SILENCE_BYTE, pre_silence_samples) < 0) goto write_err;
 
-    /* Leader */
-    for (i = 0; i < (int)leader_count; i++)
-        if (write_vz_byte(fout, LEADER_BYTE) < 0) goto write_err;
+    if (fast_mode == 1) {
+        /*
+         * Write Stage 1: Standard ROM tape encoding with the fast bootstrap stub
+         */
+        uint16_t stub_load = FAST_BOOT_STUB_LOAD_ADDR;
+        uint16_t stub_end  = (uint16_t)(stub_load + sizeof(FAST_BOOT_STUB));
+        uint8_t  stub_load_lo = (uint8_t)(stub_load & 0xFF);
+        uint8_t  stub_load_hi = (uint8_t)((stub_load >> 8) & 0xFF);
+        uint8_t  stub_end_lo  = (uint8_t)(stub_end & 0xFF);
+        uint8_t  stub_end_hi  = (uint8_t)((stub_end >> 8) & 0xFF);
+        uint32_t stub_cksum = (uint32_t)stub_load_lo + stub_load_hi + stub_end_lo + stub_end_hi;
+        uint32_t s_idx;
 
-    /* Sync preamble */
-    for (i = 0; i < (int)sync_count; i++)
-        if (write_vz_byte(fout, SYNC_BYTE) < 0) goto write_err;
+        for (s_idx = 0; s_idx < sizeof(FAST_BOOT_STUB); s_idx++)
+            stub_cksum += FAST_BOOT_STUB[s_idx];
 
-    /* File-type byte */
-    if (write_vz_byte(fout, file_type) < 0) goto write_err;
+        /* Leader */
+        for (i = 0; i < (int)leader_count; i++)
+            if (write_vz_byte(fout, LEADER_BYTE) < 0) goto write_err;
 
-    /* Filename */
-    {
-        uint32_t j;
-        for (j = 0; j < fn_write_len; j++)
-            if (write_vz_byte(fout, filename[j]) < 0) goto write_err;
+        /* Sync preamble */
+        for (i = 0; i < (int)sync_count; i++)
+            if (write_vz_byte(fout, SYNC_BYTE) < 0) goto write_err;
+
+        /* File type: Machine Code (0xF1) so BIOS immediately executes it */
+        if (write_vz_byte(fout, 0xF1) < 0) goto write_err;
+
+        /* Filename */
+        {
+            uint32_t j;
+            for (j = 0; j < fn_write_len; j++)
+                if (write_vz_byte(fout, filename[j]) < 0) goto write_err;
+        }
+
+        /* Padding gap */
+        if (artifact_mode) {
+            if (write_artifact_padding(fout) < 0) goto write_err;
+        } else {
+            if (write_raw(fout, SILENCE_BYTE, PADDING_RAW_BYTES) < 0) goto write_err;
+        }
+
+        /* Address block */
+        if (write_vz_byte(fout, stub_load_lo) < 0) goto write_err;
+        if (write_vz_byte(fout, stub_load_hi) < 0) goto write_err;
+        if (write_vz_byte(fout, stub_end_lo)  < 0) goto write_err;
+        if (write_vz_byte(fout, stub_end_hi)  < 0) goto write_err;
+
+        /* Stub body */
+        for (s_idx = 0; s_idx < sizeof(FAST_BOOT_STUB); s_idx++)
+            if (write_vz_byte(fout, FAST_BOOT_STUB[s_idx]) < 0) goto write_err;
+
+        /* Checksum */
+        if (write_vz_byte(fout, (uint8_t)(stub_cksum & 0xFF)) < 0) goto write_err;
+        if (write_vz_byte(fout, (uint8_t)((stub_cksum >> 8) & 0xFF)) < 0) goto write_err;
+        if (write_vz_byte(fout, POST_CKSUM_GUARD) < 0) goto write_err;
+
+        /* Interstage silence gap */
+        if (write_raw(fout, SILENCE_BYTE, FAST_INTERSTAGE_GAP_SAMPLES) < 0) goto write_err;
     }
 
-    /* Raw padding */
-    if (artifact_mode) {
-        if (write_artifact_padding(fout) < 0) goto write_err;
+    if (fast_mode != 0) {
+        /*
+         * Write Speedload Block (2018AD protocol):
+         * 1) 7 bytes of 0x00 + 1 byte of 0x01 sync sequence
+         * 2) 1 byte file_type (0xF0 for BASIC, 0xF1 for MC)
+         * 3) 2 bytes start address (addr_lo, addr_hi)
+         * 4) 2 bytes length (body_len_lo, body_len_hi)
+         * 5) body bytes
+         */
+        uint32_t b_idx;
+        for (i = 0; i < FAST_SYNC_BYTE_COUNT; i++)
+            if (write_fast_byte(fout, 0x00) < 0) goto write_err;
+        if (write_fast_byte(fout, 0x01) < 0) goto write_err;
+
+        if (write_fast_byte(fout, file_type) < 0) goto write_err;
+        if (write_fast_byte(fout, addr_lo) < 0) goto write_err;
+        if (write_fast_byte(fout, addr_hi) < 0) goto write_err;
+        if (write_fast_byte(fout, (uint8_t)(body_len & 0xFF)) < 0) goto write_err;
+        if (write_fast_byte(fout, (uint8_t)((body_len >> 8) & 0xFF)) < 0) goto write_err;
+
+        for (b_idx = 0; b_idx < body_len; b_idx++)
+            if (write_fast_byte(fout, body[b_idx]) < 0) goto write_err;
+
+        /* Emit one trailing short bit to complete the edge of the final bit */
+        if (write_fast_bit(fout, 0) < 0) goto write_err;
     } else {
-        if (write_raw(fout, SILENCE_BYTE, PADDING_RAW_BYTES) < 0) goto write_err;
+        /* Standard VZ audio stream */
+        /* Leader */
+        for (i = 0; i < (int)leader_count; i++)
+            if (write_vz_byte(fout, LEADER_BYTE) < 0) goto write_err;
+
+        /* Sync preamble */
+        for (i = 0; i < (int)sync_count; i++)
+            if (write_vz_byte(fout, SYNC_BYTE) < 0) goto write_err;
+
+        /* File-type byte */
+        if (write_vz_byte(fout, file_type) < 0) goto write_err;
+
+        /* Filename */
+        {
+            uint32_t j;
+            for (j = 0; j < fn_write_len; j++)
+                if (write_vz_byte(fout, filename[j]) < 0) goto write_err;
+        }
+
+        /* Raw padding */
+        if (artifact_mode) {
+            if (write_artifact_padding(fout) < 0) goto write_err;
+        } else {
+            if (write_raw(fout, SILENCE_BYTE, PADDING_RAW_BYTES) < 0) goto write_err;
+        }
+
+        /* Address block */
+        if (write_vz_byte(fout, addr_lo)     < 0) goto write_err;
+        if (write_vz_byte(fout, addr_hi)     < 0) goto write_err;
+        if (write_vz_byte(fout, end_addr_lo) < 0) goto write_err;
+        if (write_vz_byte(fout, end_addr_hi) < 0) goto write_err;
+
+        /* Body */
+        {
+            uint32_t j;
+            for (j = 0; j < body_len; j++)
+                if (write_vz_byte(fout, body[j]) < 0) goto write_err;
+        }
+
+        /* Checksum */
+        if (write_vz_byte(fout, cksum_lo) < 0) goto write_err;
+        if (write_vz_byte(fout, cksum_hi) < 0) goto write_err;
+        if (!compat_mode && write_vz_byte(fout, POST_CKSUM_GUARD) < 0) goto write_err;
     }
-
-    /* Address block */
-    if (write_vz_byte(fout, addr_lo)     < 0) goto write_err;
-    if (write_vz_byte(fout, addr_hi)     < 0) goto write_err;
-    if (write_vz_byte(fout, end_addr_lo) < 0) goto write_err;
-    if (write_vz_byte(fout, end_addr_hi) < 0) goto write_err;
-
-    /* Body */
-    {
-        uint32_t j;
-        for (j = 0; j < body_len; j++)
-            if (write_vz_byte(fout, body[j]) < 0) goto write_err;
-    }
-
-    /* Checksum */
-    if (write_vz_byte(fout, cksum_lo) < 0) goto write_err;
-    if (write_vz_byte(fout, cksum_hi) < 0) goto write_err;
-    /*
-     * Guard byte after checksum: leaves a clean high/low transition after
-     * the final checksum bit so decoders that classify cycles using a
-     * look-ahead edge can still recover the checksum reliably.
-     */
-    if (!compat_mode && write_vz_byte(fout, POST_CKSUM_GUARD) < 0) goto write_err;
 
     /* Post-silence */
     if (write_raw(fout, SILENCE_BYTE, post_silence_samples) < 0) goto write_err;
@@ -503,6 +835,16 @@ usage:
     printf("  Timing      : %s (pre=%" PRIu32 ", leader=%" PRIu32 ", sync=%" PRIu32 ", post=%" PRIu32 ")\n",
            robust_mode ? "robust" : "normal",
            pre_silence_samples, leader_count, sync_count, post_silence_samples);
+    printf("  Waveform    : %s\n",
+           g_waveform_mode == WAVEFORM_SQUARE ? "square wave (--square)" :
+           g_waveform_mode == WAVEFORM_SINE   ? "sine wave (--sine)" : "DOS original (reconstructed)");
+    if (fast_mode == 1) {
+        printf("  Loader      : fast 2018AD self-booting (ROM stub + ~12.5x speedload)\n");
+    } else if (fast_mode == 2) {
+        printf("  Loader      : fast 2018AD raw speedload block (~12.5x speedload)\n");
+    } else {
+        printf("  Loader      : standard VZ tape (~580 baud)\n");
+    }
     printf("  Gain        : %+d%% (scale %.2fx)\n",
            g_output_gain_percent, (100.0 + (double)g_output_gain_percent) / 100.0);
     printf("\nDone.\n");
