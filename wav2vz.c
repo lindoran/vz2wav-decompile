@@ -878,7 +878,6 @@ int main(int argc, char *argv[])
     /* ------------------------------------------------------------------ */
     printf("\t\tWAV2VZ v%s - ", TOOL_VERSION);
     printf("WAV file to .VZ converter\n\n");
-    print_usage();
 
     /* ------------------------------------------------------------------ */
     /* Argument check                                                       */
