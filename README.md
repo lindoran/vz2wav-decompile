@@ -120,6 +120,10 @@ Options:
   Signed input gain delta around center before classification.
   Default is `0`.
 
+- Fast-load WAVs report the packed program's file type, filename, addresses,
+  and size. For self-booting hybrid WAVs, the filename is read from the
+  standard VZ preamble; raw fast-load WAVs do not contain a filename.
+
 - `--analyze`, `-a`
   Analyze-only mode (no `.vz` output). Prints capture diagnostics such as
   min/max/mean, first signal position, run-length stats, cycle histogram,

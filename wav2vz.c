@@ -773,6 +773,71 @@ static uint16_t read_u16_le(void)
     return (uint16_t)(lo | (hi << 8u));
 }
 
+static int read_preamble_filename(long wav_data_pos, uint8_t filename[17])
+{
+    int c;
+    int i;
+    uint8_t b;
+
+    if (fseek(g_wav, wav_data_pos, SEEK_SET) != 0)
+        return -1;
+
+    g_logic_state = -1;
+    g_prev_raw1 = LOGIC_CENTER;
+    g_prev_raw2 = LOGIC_CENTER;
+    g_allow_eof = 1;
+    g_hit_eof = 0;
+
+    do {
+        c = fgetc(g_wav);
+    } while (c != EOF && (unsigned)c < TAPE_LEADER_THRESH);
+    if (c == EOF)
+        goto not_found;
+
+    do {
+        b = ReadVZbyte();
+        if (g_hit_eof)
+            goto not_found;
+    } while (b != (uint8_t)TAPE_START_BYTE);
+
+    do {
+        b = ReadVZbyte();
+        if (g_hit_eof)
+            goto not_found;
+    } while (b == (uint8_t)TAPE_START_BYTE);
+
+    if (b != (uint8_t)TAPE_PREAMBLE_BYTE)
+        goto not_found;
+
+    for (i = 0; i < 4; i++) {
+        if (ReadVZbyte() != (uint8_t)TAPE_PREAMBLE_BYTE || g_hit_eof)
+            goto not_found;
+    }
+
+    b = ReadVZbyte();
+    if (g_hit_eof || (b != 0xF0u && b != 0xF1u))
+        goto not_found;
+
+    memset(filename, 0, 17u);
+    for (i = 0; i < 17; i++) {
+        filename[i] = ReadVZbyte();
+        if (g_hit_eof)
+            goto not_found;
+        if (filename[i] == 0u)
+            break;
+    }
+    filename[16] = 0u;
+    g_allow_eof = 0;
+    g_hit_eof = 0;
+    return 1;
+
+not_found:
+    g_allow_eof = 0;
+    g_hit_eof = 0;
+    clearerr(g_wav);
+    return 0;
+}
+
 /* -----------------------------------------------------------------------
  * main()
  * ----------------------------------------------------------------------- */
@@ -786,6 +851,7 @@ int main(int argc, char *argv[])
     uint8_t    b;               /* decoded tape byte                        */
     int        c;               /* raw fgetc result -- MUST stay int        */
     int        i;
+    long       wav_data_pos;
     uint8_t    file_type;
     uint8_t    filename_buf[17];
     uint16_t   start_addr, end_addr, data_size;
@@ -896,6 +962,9 @@ int main(int argc, char *argv[])
         g_wav = NULL;
         return 0;
     }
+    wav_data_pos = ftell(g_wav);
+    if (wav_data_pos < 0)
+        fatal("error -- could not locate WAV data");
 
     /* ------------------------------------------------------------------ */
     /* Open VZ output                                                       */
@@ -929,21 +998,33 @@ int main(int argc, char *argv[])
     // Attempt fast speedloader decoding before standard leader processing
     FastBlock fastBlock;
     if (decode_fast_speedload_block(&fastBlock)) {
+        int has_filename = read_preamble_filename(wav_data_pos, filename_buf);
+        uint16_t end_addr = (uint16_t)(fastBlock.start_addr + fastBlock.data_size);
+
+        if (has_filename < 0)
+            fatal("error -- could not rewind WAV input");
+
         printf("Fast loader block detected. Decoding...\n");
+        printf("File type         : %02X\n", (unsigned)fastBlock.file_type);
+        printf("Filename          : %s\n",
+               has_filename ? (const char *)filename_buf : "(not present)");
+        printf("Start Address     : %04X\n", (unsigned)fastBlock.start_addr);
+        printf("End Address       : %04X\n", (unsigned)end_addr);
+        printf("Size in bytes     : %u\n\n", (unsigned)fastBlock.data_size);
+
         // Build VZ header from fast block
         memset(&vz_hdr, 0, sizeof(vz_hdr));
         vz_hdr.magic[0] = (uint8_t)'V';
         vz_hdr.magic[1] = (uint8_t)'Z';
         vz_hdr.magic[2] = (uint8_t)'F';
         vz_hdr.magic[3] = (fastBlock.file_type == 0xF0u) ? (uint8_t)'0' : (uint8_t)'O';
-        // No filename stored; leave empty
-        memset(vz_hdr.filename, 0, sizeof(vz_hdr.filename));
+        if (has_filename)
+            memcpy(vz_hdr.filename, filename_buf, sizeof(filename_buf));
         vz_hdr.file_type = fastBlock.file_type;
         vz_hdr.start_addr = fastBlock.start_addr;
         if (fwrite(&vz_hdr, sizeof(VzHeader), 1u, g_vz) != 1u)
             fatal("error writing VZ header (fast)");
         // Compute checksum (start + end + payload)
-        uint16_t end_addr = (uint16_t)(fastBlock.start_addr + fastBlock.data_size);
         uint16_t checksum_calc = (uint16_t)(
             (fastBlock.start_addr & 0x00FFu) +
             ((fastBlock.start_addr >> 8) & 0x00FFu) +
