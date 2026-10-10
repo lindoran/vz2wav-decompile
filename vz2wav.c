@@ -142,13 +142,14 @@ static const unsigned char BIT0_WAVE_SINE[SAMPLES_PER_BIT] = {
 #define FAST_INTERSTAGE_GAP_SAMPLES 11025   /* 0.5 sec silence between stub and fast data */
 
 /*
- * Z80 machine code bootstrap receiver (156 bytes, assembled to run at 0x7AE9).
+ * Z80 machine code bootstrap receiver (237 bytes, assembled to run at 0x7AE9).
  * - Disables interrupts, configures SP, sets IY=0x6800, D=26 (pulse threshold)
  * - Synchronizes on 60 short pulses, followed by the sync end (long pulse)
  * - Reads 1-byte file_type (0xF0=BASIC, 0xF1=MC)
  * - Reads 2-byte start address (little endian)
  * - Reads 2-byte length (little endian)
  * - Loops reading bytes at high speed (~7,350 baud) directly into destination RAM
+ * - Verifies the trailing checksum (address bytes + payload) without storing it
  * - Updates system variables (0x78F9 end address, 0x78A4 PRGEND if BASIC)
  * - If BASIC: calls RENEW_LINE_PTRS (0x1AFC), VRESET (0x1B5D), writes ASCII
  *             "RUN\0" into I/O buffer (0x79E8), then executes via JP 0x1A81
@@ -156,15 +157,17 @@ static const unsigned char BIT0_WAVE_SINE[SAMPLES_PER_BIT] = {
  *
  * Layout / notable addresses (load base = 0x7AE9):
  *   0x7AE9 +   0 : DI / LD SP,0x7FFF / LD IY,0x6800 / LD D,0x1A / LD E,0x3C
- *   0x7AE9 +  51 : receive-header section (6x CALL read_bit @ 0x7B6D)
+ *   0x7AE9 +  51 : receive-header section (6x CALL read_bit @ 0x7B7E)
  *   0x7AE9 +  74 : receive-body loop
- *   0x7AE9 +  97 : JR Z,+0x1F  -> 0x7B6B (MC path)
- *   0x7AE9 +  99 : BASIC path: LD(PRGEND),HL / CALL RENEW_LINE_PTRS / CALL VRESET
- *   0x7AE9 + 108 : BASIC completion: EI / write "RUN\0" to 0x79E8 / JP 0x1A81
- *   0x7AE9 + 130 : MC completion: EI / JP (HL)
- *   0x7AE9 + 132 : read_bit subroutine (0x7B6D, 24 bytes)
+ *   0x7AE9 + 112 : CP 0xF1
+ *   0x7AE9 + 114 : JR Z,+0x1F  -> 0x7B7C (MC path)
+ *   0x7AE9 + 116 : BASIC path: LD(PRGEND),HL / CALL RENEW_LINE_PTRS / CALL VRESET
+ *   0x7AE9 + 125 : BASIC completion: EI / write "RUN\0" to 0x79E8 / JP 0x1A81
+ *   0x7AE9 + 147 : MC completion: EI / JP (HL)
+ *   0x7AE9 + 149 : read_bit subroutine (0x7B7E, 24 bytes)
+ *   0x7AE9 + 173 : checksum verifier (0x7B96, 64 bytes)
  */
-static const uint8_t FAST_BOOT_STUB[156] = {
+static const uint8_t FAST_BOOT_STUB[237] = {
     /* [  0] 0x7AE9 : DI / LD SP,0x7FFF / LD IY,0x6800 / LD D,0x1A / LD E,0x3C */
     0xF3, 0x31, 0xFF, 0x7F, 0xFD, 0x21, 0x00, 0x68, 0x16, 0x1A, 0x1E, 0x3C,
     /* [ 12] 0x7AF5 : sync loop (short-pulse counting) */
@@ -173,20 +176,23 @@ static const uint8_t FAST_BOOT_STUB[156] = {
     0xCB, 0x00, 0x76, 0x20, 0xF9, 0x3C, 0xFD, 0xCB, 0x00, 0x76, 0x28, 0xF9,
     0xBA, 0x38, 0xEE,
     /* [ 51] 0x7B1C : read header: file_type, addr lo/hi, len lo/hi */
-    /*        CALLs now target read_bit at 0x7B6D (was 0x7B67)       */
-    0xCD, 0x6D, 0x7B, 0x7B, 0xF5, 0xCD, 0x6D, 0x7B, 0x6B,
-    0xCD, 0x6D, 0x7B, 0x63, 0xE5, 0xCD, 0x6D, 0x7B, 0x4B, 0xCD, 0x6D, 0x7B,
+    /*        CALLs target read_bit at 0x7B7E                        */
+    0xCD, 0x7E, 0x7B, 0x7B, 0xF5, 0xCD, 0x7E, 0x7B, 0x6B,
+    0xCD, 0x7E, 0x7B, 0x63, 0xE5, 0xCD, 0x7E, 0x7B, 0x4B, 0xCD, 0x7E, 0x7B,
     0x43, 0xC5,
     /* [ 74] 0x7B33 : receive-body loop */
-    0xCD, 0x6D, 0x7B, 0x73, 0x23, 0x0B, 0x78, 0xB1, 0x20, 0xF6,
-    /* [ 84] 0x7B3D : post-load: compute end_addr, store in 0x78F9, restore regs */
-    0xC1, 0xD1, 0xD5, 0x62, 0x6B, 0x09, 0x22, 0xF9, 0x78, 0xE1, 0xF1, 0xFE,
-    /* [ 96] 0x7B49 : CP 0xF1 (machine code?) */
-    /* [ 97] 0x7B4A : JR Z, +0x1F  ->  0x7B6B (MC path at offset 130) */
+    0xCD, 0x7E, 0x7B, 0x73, 0x23, 0x0B, 0x78, 0xB1, 0x20, 0xF6,
+    /* Capture checksum immediately: the fast stream has no pause after the payload. */
+    0xCD, 0x7E, 0x7B, 0xD5, 0xCD, 0x7E, 0x7B, 0xD5, 0xC1, 0xD1, 0xD9,
+    /* [ 95] 0x7B48 : post-load: compute end_addr, store in 0x78F9, restore regs */
+    0xC1, 0xD1, 0xD5, 0x62, 0x6B, 0x09, 0x22, 0xF9, 0x78, 0xE1,
+    0xCD, 0x96, 0x7B, 0x30, 0x01, 0x76, 0xF1, 0xFE,
+    /* [112] 0x7B59 : CP 0xF1 (machine code?) */
+    /* [114] 0x7B5B : JR Z, +0x1F  ->  0x7B7C (MC path at offset 147) */
     0xF1, 0x28, 0x1F,
-    /* [ 99] 0x7B4C : BASIC path: store start_addr in PRGEND, renew ptrs, reset vars */
+    /* [116] 0x7B5D : BASIC path: store start_addr in PRGEND, renew ptrs, reset vars */
     0x22, 0xA4, 0x78, 0xCD, 0xFC, 0x1A, 0xCD, 0x5D, 0x1B,
-    /* [108] 0x7B55 : BASIC completion:
+    /* [125] 0x7B66 : BASIC completion:
      *   EI
      *   LD HL, 0x79E8       ; I/O buffer address
      *   LD (HL), 'R'        ; write ASCII "RUN\0" so 0x1A81 executes RUN
@@ -211,12 +217,21 @@ static const uint8_t FAST_BOOT_STUB[156] = {
     0x21, 0xE7, 0x79,        /* LD HL,0x79E7 */
     0xAF,                    /* XOR A */
     0xC3, 0x81, 0x1A,        /* JP  0x1A81 */
-    /* [130] 0x7B6B : MC completion: EI / JP (HL) -> start_addr */
+    /* [147] 0x7B7C : MC completion: EI / JP (HL) -> start_addr */
     0xFB, 0xE9,
-    /* [132] 0x7B6D : read_bit subroutine (24 bytes) */
+    /* [149] 0x7B7E : read_bit subroutine (24 bytes) */
     0x1E, 0x01, 0xAF, 0x3C, 0xFD, 0xCB,
     0x00, 0x76, 0x20, 0xF9, 0x3C, 0xFD, 0xCB, 0x00, 0x76, 0x28, 0xF9, 0xBA,
-    0x3F, 0xCB, 0x13, 0x30, 0xEB, 0xC9
+    0x3F, 0xCB, 0x13, 0x30, 0xEB, 0xC9,
+    /* [173] 0x7B96 : sum start address, end address and payload; compare captured trailer */
+    0xC5, 0xD5, 0xE5, 0x7B, 0x82, 0x6F, 0x3E, 0x00, 0xCE, 0x00, 0x67,
+    0x1A, 0x85, 0x6F, 0x7C, 0xCE, 0x00, 0x67, 0x13, 0x0B, 0x78, 0xB1, 0x20, 0xF3,
+    0x3A, 0xF9, 0x78, 0x85, 0x6F, 0x7C, 0xCE, 0x00, 0x67,
+    0x3A, 0xFA, 0x78, 0x85, 0x6F, 0x7C, 0xCE, 0x00, 0x67,
+    0xD9, 0x7B, 0xD9, 0xBD, 0x20, 0x0B,
+    0xD9, 0x79, 0xD9, 0xBC, 0x20, 0x05,
+    0xE1, 0xD1, 0xC1, 0xB7, 0xC9,
+    0xE1, 0xD1, 0xC1, 0x37, 0xC9
 };
 
 /* -------------------------------------------------------------------------
@@ -673,6 +688,13 @@ usage:
                 fast_data_len_samples += bit ? 8u : 4u;
             }
         }
+        for (b_idx = 0; b_idx < 2; b_idx++) {
+            uint8_t checksum_byte = b_idx == 0 ? cksum_lo : cksum_hi;
+            for (bit_idx = 0; bit_idx < 8; bit_idx++) {
+                int bit = (checksum_byte >> (7 - bit_idx)) & 1;
+                fast_data_len_samples += bit ? 8u : 4u;
+            }
+        }
     }
 
     /* Compute total samples depending on fast_mode */
@@ -688,7 +710,7 @@ usage:
     } else if (fast_mode == 1) {
         /*
          * Self-booting hybrid WAV:
-         * Stage 1: Standard ROM tape encoding of the 156-byte FAST_BOOT_STUB
+         * Stage 1: Standard ROM tape encoding of the 237-byte FAST_BOOT_STUB
          *          (Machine Code 0xF1, load address 0x7AE9, end 0x7B85)
          * Stage 2: 0.5s interstage silence gap
          * Stage 3: Speedload block containing the actual file payload
@@ -809,6 +831,7 @@ usage:
          * 3) 2 bytes start address (addr_lo, addr_hi)
          * 4) 2 bytes length (body_len_lo, body_len_hi)
          * 5) body bytes
+         * 6) 2-byte standard VZ checksum (little-endian)
          */
         uint32_t b_idx;
         for (i = 0; i < FAST_SYNC_BYTE_COUNT; i++)
@@ -823,6 +846,9 @@ usage:
 
         for (b_idx = 0; b_idx < body_len; b_idx++)
             if (write_fast_byte(fout, body[b_idx]) < 0) goto write_err;
+
+        if (write_fast_byte(fout, cksum_lo) < 0 ||
+            write_fast_byte(fout, cksum_hi) < 0) goto write_err;
 
         /* Emit one trailing short bit to complete the edge of the final bit */
         if (write_fast_bit(fout, 0) < 0) goto write_err;

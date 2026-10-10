@@ -121,8 +121,12 @@ Options:
   Default is `0`.
 
 - Fast-load WAVs report the packed program's file type, filename, addresses,
-  and size. For self-booting hybrid WAVs, the filename is read from the
-  standard VZ preamble; raw fast-load WAVs do not contain a filename.
+  size, and checksum status. The fast stream includes the standard two-byte
+  VZ checksum, which the self-booting loader checks and `wav2vz` verifies;
+  neither checksum byte is written to the output `.vz` payload. For
+  self-booting hybrid WAVs, the filename is read from the standard VZ
+  preamble; raw fast-load WAVs do not contain a filename. Fast-load WAVs
+  without the checksum trailer are treated as incomplete.
 
 - `--analyze`, `-a`
   Analyze-only mode (no `.vz` output). Prints capture diagnostics such as
