@@ -21,6 +21,12 @@ controls, capture diagnostics, modern export/pack workflows (`vzexport`
 and `vzpack`), cross-platform targets (Linux, Win32/Win64, DOS), unified
 versioning, and install/package automation.
 
+## Downloads:
+
+You can download a .zip of the command line tools from the [`./dist`](./dist "Download Files") 
+directory.  Current supported architectures are 16bit dos, 32bit windows,
+64 bit windows and linux consoles.  
+
 ## Findings
 
 We discovered two bugs in the original Borland C code. Both were caused
@@ -41,7 +47,10 @@ offering a legacy mode.
 ## Usage
 Precompiled Packages:
 Please find multiple ZIP files by platform for convenience in the
-`./dist` folder at the root of this repository.
+[`./dist`](./dist "Download Files") folder at the root of this repository.
+you can place the files in a directory with the tools or you can put the 
+tools in your path someplace and they will work that way as well.
+
 
 Versioning:
 
@@ -58,10 +67,41 @@ Options:
 
 - `--fast`, `-f`
   Emit 2018AD speedload audio with a self-booting bootstrap stub (~12.5x speed).
-  Stage 1 loads a compact 150-byte machine code receiver via standard VZ ROM
-  `SYSTEM` or `CRUN` / `CLOAD`, which immediately receives the payload at
-  ~7,350 baud, relocates it to its target address, and auto-executes (RUN for BASIC,
-  or direct JP for machine code).
+  Stage 1 loads a 237-byte machine-code receiver via the standard VZ ROM
+  `SYSTEM` or `CRUN` / `CLOAD`, which receives the payload at ~7,350 baud and
+  auto-executes it (RUN for BASIC or a direct jump for machine code). If the
+  payload overlaps the receiver, the receiver is relocated to a free address
+  above the payload, and its internal call targets and stack are adjusted.
+  The tool reports the receiver location and minimum RAM for both payload
+  and loader (including its 512-byte temporary stack), rounded up to a whole
+  1024-byte KB, with the exact highest required address shown too.
+  Relocation is limited to the fixed RAM range below `0xC000`; conversion
+  fails if no safe receiver/stack space is available.
+
+  a hard and fast example: with the small reciver payload, a 6K program loads 
+  in about 20 seconds as compared to several minutes!
+
+- `--fast-flat-ram`
+  Allow `--fast` to relocate the receiver and temporary stack into RAM above
+  `0xBFFF`, up to `0xFFFF`. Use this only on modified systems with contiguous,
+  flat RAM throughout `0x7800`-`0xFFFF`; the default limit remains `0xC000`
+  for systems with bank-switched or absent memory above that address.
+
+- `--fast-vram`
+  Use the self-booting fast loader, but place the receiver at `0x7200` and
+  its 512-byte temporary stack at `0x7600`-`0x77FF`, in the unused video-RAM
+  area above the 512-byte text screen. This is opt-in and can reduce the
+  ordinary RAM required by loader overhead; the minimum-RAM report then
+  counts the program payload in main RAM. The machine-code program receives
+  control with the temporary stack still in video RAM and is responsible for
+  selecting its runtime stack, as it normally would. The payload must not
+  overlap the reserved video-RAM loader/stack area.  This is useful when you:
+  need to get the payload to fit in most of the ram, or if you have a stock 
+  2K or 6K VZ200.  This works beccause the fast loader runs in text mode,
+  and the video circut is only using 512 bytes of the full 2K of video ram.
+  this may cause some snow during loading on a stock VZ...  This is normal
+  and will not hurt the machine. Homebrew machines that use dual port ram
+  such as the HB200 don't have this issue.
 
 - `--fast-raw`
   Emit raw 2018AD speedload audio block without the standard bootstrap stub.
@@ -72,6 +112,13 @@ Options:
   - `dos` (default): Exact Borland C DOS waveform table for byte-accurate compatibility.
   - `square` (or `--square`): Clean digital square wave (`195` high, `61` low).
   - `sine` (or `--sine`, `--sin`): Clean synthesized sine wave.
+  
+  testing seems to indicate that very little difference is found by modifiying this
+  paramiter, but its here for completeness.  The circut as built on the VZ200 / 300 
+  really cares only about the amplitude and timing of the waveform.  So changing the
+  gain has more of an effect, however a bunch of testing on a lot of sound cards 
+  has revealed about 110% gain with max volume on the preamp of the sound card 
+  produces the best results.
 
 - `--square`
   Convenience shorthand for `--waveform square`.
@@ -277,10 +324,14 @@ UNLICENSE (public domain dedication), see:
 - `NOTICE`
 
 Scope clarification:
-
 - This dedication applies only to rights held by this repository's
   contributors.
 - Third-party/inherited components (notably `text2bas.c` and
   `AtariST_Version_SRC/`) keep their own provenance/licensing status as
   documented in `TEXT2BAS.md`.
 - This project is provided as-is, without warranty.
+
+Shout outs: 
+- Greetz to Morbid, Imodium, vilcans and all of Five Finger Punch, for the
+  fantastic fast loader they developed. All credit for that fantastic work 
+  goes to them.

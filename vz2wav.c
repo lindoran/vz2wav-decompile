@@ -76,6 +76,24 @@
 
 static int g_output_gain_percent = DEFAULT_GAIN_PERCENT;
 
+static int memory_range_overlaps(uint16_t load_addr, uint32_t length,
+                                 uint32_t range_start, uint32_t range_end)
+{
+    uint32_t end;
+
+    if (length == 0)
+        return 0;
+    if (length >= 0x10000u)
+        return 1;
+
+    end = (uint32_t)load_addr + length;
+    if (end <= 0x10000u)
+        return (uint32_t)load_addr < range_end && range_start < end;
+
+    return (uint32_t)load_addr < range_end ||
+           range_start < end - 0x10000u;
+}
+
 typedef enum {
     WAVEFORM_DOS = 0,
     WAVEFORM_SQUARE,
@@ -140,9 +158,19 @@ static const unsigned char BIT0_WAVE_SINE[SAMPLES_PER_BIT] = {
 #define FAST_BOOT_STUB_LOAD_ADDR    0x7AE9
 #define FAST_SYNC_BYTE_COUNT        7
 #define FAST_INTERSTAGE_GAP_SAMPLES 11025   /* 0.5 sec silence between stub and fast data */
+#define FAST_BOOT_READ_BIT_OFFSET   149u
+#define FAST_BOOT_CHECKSUM_OFFSET  173u
+#define FAST_BOOT_STACK_RESERVE     512u
+#define FAST_BOOT_RAM_START         0x7800u
+#define FAST_BOOT_RAM_END           0xC000u
+#define FAST_BOOT_FLAT_RAM_END      0x10000u
+#define FAST_BOOT_VRAM_LOADER_START 0x7200u
+#define FAST_BOOT_VRAM_STACK_START  0x7600u
+#define FAST_BOOT_VRAM_STACK_TOP    0x7800u
 
 /*
- * Z80 machine code bootstrap receiver (237 bytes, assembled to run at 0x7AE9).
+ * Z80 machine code bootstrap receiver (237 bytes, assembled for base 0x7AE9).
+ * Relocation patches its absolute internal CALL targets and private stack top.
  * - Disables interrupts, configures SP, sets IY=0x6800, D=26 (pulse threshold)
  * - Synchronizes on 60 short pulses, followed by the sync end (long pulse)
  * - Reads 1-byte file_type (0xF0=BASIC, 0xF1=MC)
@@ -156,8 +184,8 @@ static const unsigned char BIT0_WAVE_SINE[SAMPLES_PER_BIT] = {
  * - If MC:   enables interrupts and jumps directly to start address via JP (HL)
  *
  * Layout / notable addresses (load base = 0x7AE9):
- *   0x7AE9 +   0 : DI / LD SP,0x7FFF / LD IY,0x6800 / LD D,0x1A / LD E,0x3C
- *   0x7AE9 +  51 : receive-header section (6x CALL read_bit @ 0x7B7E)
+ *   0x7AE9 +   0 : DI / LD SP,patched_top / LD IY,0x6800 / LD D,0x1A / LD E,0x3C
+ *   0x7AE9 +  51 : receive-header section (5x CALL read_bit @ 0x7B7E)
  *   0x7AE9 +  74 : receive-body loop
  *   0x7AE9 + 112 : CP 0xF1
  *   0x7AE9 + 114 : JR Z,+0x1F  -> 0x7B7C (MC path)
@@ -168,7 +196,7 @@ static const unsigned char BIT0_WAVE_SINE[SAMPLES_PER_BIT] = {
  *   0x7AE9 + 173 : checksum verifier (0x7B96, 64 bytes)
  */
 static const uint8_t FAST_BOOT_STUB[237] = {
-    /* [  0] 0x7AE9 : DI / LD SP,0x7FFF / LD IY,0x6800 / LD D,0x1A / LD E,0x3C */
+    /* [  0] 0x7AE9 : DI / LD SP,patched_top / LD IY,0x6800 / LD D,0x1A / LD E,0x3C */
     0xF3, 0x31, 0xFF, 0x7F, 0xFD, 0x21, 0x00, 0x68, 0x16, 0x1A, 0x1E, 0x3C,
     /* [ 12] 0x7AF5 : sync loop (short-pulse counting) */
     0xAF, 0x3C, 0xFD, 0xCB, 0x00, 0x76, 0x20, 0xF9, 0x3C, 0xFD, 0xCB, 0x00,
@@ -233,6 +261,84 @@ static const uint8_t FAST_BOOT_STUB[237] = {
     0xE1, 0xD1, 0xC1, 0xB7, 0xC9,
     0xE1, 0xD1, 0xC1, 0x37, 0xC9
 };
+
+static int prepare_fast_boot_stub(uint16_t payload_addr, uint32_t payload_len,
+                                  uint8_t *stub, uint16_t *stub_addr,
+                                  uint16_t *stack_top, int use_video_ram,
+                                  uint32_t ram_end)
+{
+    const uint32_t payload_end = (uint32_t)payload_addr + payload_len;
+    const uint32_t footprint =
+        (uint32_t)sizeof(FAST_BOOT_STUB) + FAST_BOOT_STACK_RESERVE;
+    uint32_t candidate = use_video_ram ? FAST_BOOT_VRAM_LOADER_START :
+                                         FAST_BOOT_STUB_LOAD_ADDR;
+    uint32_t stack_low;
+    uint32_t i;
+    unsigned read_bit_calls = 0;
+    unsigned checksum_calls = 0;
+
+    if (payload_end > 0x10000u)
+        return -1;
+
+    if (use_video_ram) {
+        stack_low = FAST_BOOT_VRAM_STACK_TOP - FAST_BOOT_STACK_RESERVE;
+        if (candidate + sizeof(FAST_BOOT_STUB) > FAST_BOOT_VRAM_STACK_START ||
+            memory_range_overlaps(payload_addr, payload_len,
+                                  candidate,
+                                  candidate + sizeof(FAST_BOOT_STUB)) ||
+            memory_range_overlaps(payload_addr, payload_len,
+                                  stack_low, FAST_BOOT_VRAM_STACK_TOP))
+            return -1;
+        memcpy(stub, FAST_BOOT_STUB, sizeof(FAST_BOOT_STUB));
+        if (stub[1] != 0x31u)
+            return -1;
+        *stack_top = FAST_BOOT_VRAM_STACK_TOP;
+    } else {
+        if (memory_range_overlaps(payload_addr, payload_len,
+                                  candidate, candidate + footprint)) {
+            candidate = (payload_end + 15u) & ~15u;
+        }
+
+        if (candidate + footprint > ram_end ||
+            memory_range_overlaps(payload_addr, payload_len,
+                                  candidate, candidate + footprint))
+            return -1;
+
+        memcpy(stub, FAST_BOOT_STUB, sizeof(FAST_BOOT_STUB));
+        if (stub[1] != 0x31u)
+            return -1;
+        *stack_top = (uint16_t)(candidate + footprint);
+    }
+    stub[2] = (uint8_t)(*stack_top & 0xFFu);
+    stub[3] = (uint8_t)(*stack_top >> 8);
+
+    /* Relative branches relocate as-is; rewrite only absolute internal CALLs. */
+    for (i = 0; i + 2u < sizeof(FAST_BOOT_STUB); i++) {
+        uint16_t target;
+
+        if (stub[i] != 0xCDu)
+            continue;
+        target = (uint16_t)((uint16_t)stub[i + 1u] |
+                            ((uint16_t)stub[i + 2u] << 8));
+        if (target == FAST_BOOT_STUB_LOAD_ADDR + FAST_BOOT_READ_BIT_OFFSET) {
+            target = (uint16_t)(candidate + FAST_BOOT_READ_BIT_OFFSET);
+            read_bit_calls++;
+        } else if (target == FAST_BOOT_STUB_LOAD_ADDR + FAST_BOOT_CHECKSUM_OFFSET) {
+            target = (uint16_t)(candidate + FAST_BOOT_CHECKSUM_OFFSET);
+            checksum_calls++;
+        } else {
+            continue;
+        }
+        stub[i + 1u] = (uint8_t)(target & 0xFFu);
+        stub[i + 2u] = (uint8_t)(target >> 8);
+    }
+
+    if (read_bit_calls != 8u || checksum_calls != 1u)
+        return -1;
+
+    *stub_addr = (uint16_t)candidate;
+    return 0;
+}
 
 /* -------------------------------------------------------------------------
  * Borland C artifact padding
@@ -439,6 +545,8 @@ static void print_usage(void)
         "  --square      Shorthand for --waveform square (clean square wave).\n"
         "  --sine,--sin  Shorthand for --waveform sine (clean sine wave).\n"
         "  --fast,-f     Emit 2018AD speedload audio with self-booting stub (~12.5x speed).\n"
+        "  --fast-vram   Place the self-booting loader and stack in unused video RAM.\n"
+        "  --fast-flat-ram  Allow --fast relocation into flat RAM through 0xFFFF.\n"
         "  --fast-raw    Emit raw 2018AD speedload audio block without bootstrap stub.\n"
         "  --compat,-c   Write a malformed WAV matching the original DOS program\n"
         "                (RIFF and data size fields use raw DOS stack garbage).\n"
@@ -461,6 +569,8 @@ int main(int argc, char *argv[])
     int            compat_mode   = 0;
     int            artifact_mode = 0;
     int            robust_mode   = 0;
+    int            fast_vram_mode = 0;
+    int            fast_flat_ram_mode = 0;
     int            fast_mode     = 0;  /* 1 = self-booting two-stage fast WAV, 2 = raw fast block */
 
     FILE          *fin  = NULL;
@@ -476,6 +586,10 @@ int main(int argc, char *argv[])
     uint32_t       body_len;
     uint16_t       load_addr, end_addr;
     uint8_t        end_addr_lo, end_addr_hi;
+    uint8_t        fast_boot_stub[sizeof(FAST_BOOT_STUB)];
+    uint16_t       fast_stub_addr = FAST_BOOT_STUB_LOAD_ADDR;
+    uint16_t       fast_stub_stack_top = 0;
+    uint32_t       fast_stub_required_top = 0;
     uint32_t       checksum;
     uint8_t        cksum_lo, cksum_hi;
     uint32_t       fn_write_len;
@@ -503,8 +617,19 @@ int main(int argc, char *argv[])
             robust_mode = 1;
         else if (strcmp(argv[i], "--fast") == 0 || strcmp(argv[i], "-f") == 0)
             fast_mode = 1;
-        else if (strcmp(argv[i], "--fast-raw") == 0)
+        else if (strcmp(argv[i], "--fast-vram") == 0) {
+            fast_mode = 1;
+            fast_vram_mode = 1;
+        }
+        else if (strcmp(argv[i], "--fast-flat-ram") == 0) {
+            fast_mode = 1;
+            fast_flat_ram_mode = 1;
+        }
+        else if (strcmp(argv[i], "--fast-raw") == 0) {
             fast_mode = 2;
+            fast_vram_mode = 0;
+            fast_flat_ram_mode = 0;
+        }
         else if (strcmp(argv[i], "--gain") == 0 || strcmp(argv[i], "-g") == 0) {
             if (i + 1 >= argc || parse_gain_percent(argv[++i], &g_output_gain_percent) != 0) {
                 fprintf(stderr, "vz2wav: invalid --gain value\n");
@@ -548,6 +673,10 @@ int main(int argc, char *argv[])
 usage:
         print_usage();
         return 1;
+    }
+    if (fast_vram_mode && fast_flat_ram_mode) {
+        fprintf(stderr, "vz2wav: --fast-vram and --fast-flat-ram are mutually exclusive\n");
+        goto done;
     }
 
     printf("\nvz2wav - VZ tape image to WAV converter\n");
@@ -642,6 +771,31 @@ usage:
     end_addr_lo = (uint8_t)( end_addr       & 0xFF);
     end_addr_hi = (uint8_t)((end_addr >> 8) & 0xFF);
 
+    if (fast_mode == 1) {
+        uint32_t payload_end = (uint32_t)load_addr + body_len;
+        if (prepare_fast_boot_stub(load_addr, body_len, fast_boot_stub,
+                                   &fast_stub_addr, &fast_stub_stack_top,
+                                   fast_vram_mode,
+                                   fast_flat_ram_mode ? FAST_BOOT_FLAT_RAM_END :
+                                                        FAST_BOOT_RAM_END) != 0) {
+            fprintf(stderr,
+                    fast_vram_mode
+                        ? "vz2wav: --fast-vram payload overlaps the reserved video-RAM "
+                          "loader/stack area\n"
+                        : fast_flat_ram_mode
+                            ? "vz2wav: --fast-flat-ram cannot place bootstrap and stack "
+                              "without overlapping the payload within RAM through 0xFFFF\n"
+                            : "vz2wav: --fast cannot place bootstrap and stack without "
+                              "overlapping the payload within RAM below 0xC000\n");
+            goto done;
+        }
+        fast_stub_required_top = payload_end;
+        if (!fast_vram_mode && fast_stub_required_top < fast_stub_stack_top)
+            fast_stub_required_top = fast_stub_stack_top;
+        if (fast_stub_required_top < FAST_BOOT_RAM_START)
+            fast_stub_required_top = FAST_BOOT_RAM_START;
+    }
+
     checksum = (uint32_t)addr_lo + addr_hi + end_addr_lo + end_addr_hi;
     for (i = 0; i < (int)body_len; i++)
         checksum += body[i];
@@ -657,6 +811,21 @@ usage:
         fn_write_len++;
 
     printf("  End addr  : 0x%04" PRIX16 "\n", end_addr);
+    if (fast_mode == 1) {
+        printf("  Fast loader (%" PRIu32 "KB): 0x%04" PRIX16 "-0x%04" PRIX32
+               " (stack top 0x%04" PRIX16 "%s%s)\n",
+               ((uint32_t)sizeof(fast_boot_stub) + 1023u) / 1024u,
+               fast_stub_addr,
+               (uint32_t)fast_stub_addr + (uint32_t)sizeof(fast_boot_stub) - 1u,
+               fast_stub_stack_top,
+               fast_vram_mode ? ", video RAM" : "",
+               (!fast_vram_mode && fast_stub_stack_top == 0) ?
+                   ", wraps at 0xFFFF" : "");
+        printf("  Minimum RAM (%" PRIu32 "KB): through 0x%04" PRIX32
+               " inclusive\n",
+               (fast_stub_required_top - FAST_BOOT_RAM_START + 1023u) / 1024u,
+               fast_stub_required_top - 1u);
+    }
     printf("  Checksum  : 0x%02" PRIX8 "%02" PRIX8 "\n\n", cksum_hi, cksum_lo);
 
     /*
@@ -710,8 +879,7 @@ usage:
     } else if (fast_mode == 1) {
         /*
          * Self-booting hybrid WAV:
-         * Stage 1: Standard ROM tape encoding of the 237-byte FAST_BOOT_STUB
-         *          (Machine Code 0xF1, load address 0x7AE9, end 0x7B85)
+         * Stage 1: Standard ROM tape encoding of the relocatable bootstrap stub.
          * Stage 2: 0.5s interstage silence gap
          * Stage 3: Speedload block containing the actual file payload
          */
@@ -767,8 +935,8 @@ usage:
         /*
          * Write Stage 1: Standard ROM tape encoding with the fast bootstrap stub
          */
-        uint16_t stub_load = FAST_BOOT_STUB_LOAD_ADDR;
-        uint16_t stub_end  = (uint16_t)(stub_load + sizeof(FAST_BOOT_STUB));
+        uint16_t stub_load = fast_stub_addr;
+        uint16_t stub_end  = (uint16_t)(stub_load + sizeof(fast_boot_stub));
         uint8_t  stub_load_lo = (uint8_t)(stub_load & 0xFF);
         uint8_t  stub_load_hi = (uint8_t)((stub_load >> 8) & 0xFF);
         uint8_t  stub_end_lo  = (uint8_t)(stub_end & 0xFF);
@@ -776,8 +944,8 @@ usage:
         uint32_t stub_cksum = (uint32_t)stub_load_lo + stub_load_hi + stub_end_lo + stub_end_hi;
         uint32_t s_idx;
 
-        for (s_idx = 0; s_idx < sizeof(FAST_BOOT_STUB); s_idx++)
-            stub_cksum += FAST_BOOT_STUB[s_idx];
+        for (s_idx = 0; s_idx < sizeof(fast_boot_stub); s_idx++)
+            stub_cksum += fast_boot_stub[s_idx];
 
         /* Leader */
         for (i = 0; i < (int)leader_count; i++)
@@ -811,8 +979,8 @@ usage:
         if (write_vz_byte(fout, stub_end_hi)  < 0) goto write_err;
 
         /* Stub body */
-        for (s_idx = 0; s_idx < sizeof(FAST_BOOT_STUB); s_idx++)
-            if (write_vz_byte(fout, FAST_BOOT_STUB[s_idx]) < 0) goto write_err;
+        for (s_idx = 0; s_idx < sizeof(fast_boot_stub); s_idx++)
+            if (write_vz_byte(fout, fast_boot_stub[s_idx]) < 0) goto write_err;
 
         /* Checksum */
         if (write_vz_byte(fout, (uint8_t)(stub_cksum & 0xFF)) < 0) goto write_err;
