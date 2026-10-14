@@ -107,6 +107,37 @@ Options:
   Emit raw 2018AD speedload audio block without the standard bootstrap stub.
   Useful for custom loaders and demos that already have the fast receiver in RAM.
 
+- `--fast-invert` (default), `--fast-normal`
+  Phase of the fast block's bit cells. The default (`--fast-invert`, high half of
+  each cell first) is the phase that loaded on real VZ200 hardware; the original
+  phase (`--fast-normal`, low half first) loaded in emulators and is kept for
+  systems that need it. The wrong phase is not subtle: the receiver synchronizes
+  but decodes a garbage header (typically a wild start address and length) and,
+  with interrupts off, stops responding to BREAK. Applies to `--fast`,
+  `--fast-vram`, `--fast-flat-ram`, `--fast-debug` and `--fast-raw`; `wav2vz`
+  detects either phase automatically when decoding.
+
+- `--fast-debug`
+  Like `--fast`, but the receiver is a verbose diagnostic build (about 0.9 KB)
+  that paints a live status panel in the top-left of the screen while loading,
+  then pauses about two seconds before running the program. It combines with
+  `--fast-vram` and `--fast-flat-ram` and is relocated the same way as the
+  normal receiver. Panel (all values hex):
+  - `SYNC LAST` period count of the most recent pulse pair while hunting for sync
+  - `SYNC END` count of the long pulse that ends sync; nominal `24`. A value near
+    `1B` with a nonsense header (e.g. `F8 FD FF 1C 00` for `test.vz`) is the
+    signature of the wrong phase.
+  - `HDR` file type, start address (lo, hi) and length (lo, hi) as received;
+    for `test.vz` it should read `F0 E9 7A 18 00`
+  - `BODY` raw progress while loading, then `OK`; `END` start+length;
+    `CKSUM` result of the same trailing-checksum test the normal receiver uses
+    (like the normal receiver it halts on a failure, leaving the panel visible)
+  - `SHORT` last short-pulse count (nominal `12`) and `THR` the pulse threshold
+    actually used, calibrated as (short + sync-end long) / 2
+  - `STAGE` letters appear as milestones are reached: Entered, Sync found,
+    Header read, Body done, Done
+  Source and generator are in `fast_stub/`.
+
 - `--waveform <dos|square|sine>`, `-w <dos|square|sine>`
   Select the waveform profile:
   - `dos` (default): Exact Borland C DOS waveform table for byte-accurate compatibility.
@@ -174,6 +205,9 @@ Options:
   self-booting hybrid WAVs, the filename is read from the standard VZ
   preamble; raw fast-load WAVs do not contain a filename. Fast-load WAVs
   without the checksum trailer are treated as incomplete.
+  Fast blocks of either cell phase are accepted (the inverted phase is tried first,
+  then the original); a decode is only accepted when its header is plausible
+  (file type `F0`/`F1`, start+length within 64K).
 
 - `--analyze`, `-a`
   Analyze-only mode (no `.vz` output). Prints capture diagnostics such as

@@ -628,35 +628,51 @@ static int fast_sample_state(int c)
     return (scaled >= (int)LOGIC_CENTER) ? 1 : 0;
 }
 
-static int read_fast_byte(uint8_t *value)
+/*
+ * Reads one speedload cell and returns its total length in samples (-1 on EOF).
+ * phase 0: low half first, then high half (original encoder phase).
+ * phase 1: high half first, then low half (inverted phase, vz2wav default).
+ * A cell is always measured from one edge to the next edge of the same type, so adjacent
+ * half-cells are never combined; decoding with the wrong phase yields garbage, which
+ * decode_fast_phase() rejects through its header plausibility check.
+ */
+static int fast_read_cell(int phase)
+{
+    int c;
+    int first_cnt = 0;
+    int second_cnt = 0;
+    int first = (phase == 0) ? 0 : 1;
+
+    while ((c = fgetc(g_wav)) != EOF && fast_sample_state(c) != first) {}
+    if (c == EOF)
+        return -1;
+    while (fast_sample_state(c) == first) {
+        first_cnt++;
+        c = fgetc(g_wav);
+        if (c == EOF)
+            return -1;
+    }
+    while (fast_sample_state(c) != first) {
+        second_cnt++;
+        c = fgetc(g_wav);
+        if (c == EOF)
+            break;
+    }
+    if (c != EOF)
+        ungetc(c, g_wav);
+    return first_cnt + second_cnt;
+}
+
+static int read_fast_byte(int phase, uint8_t *value)
 {
     int bit_i;
-    int c;
     uint8_t val = 0;
 
     for (bit_i = 0; bit_i < 8; bit_i++) {
-        int lo_count = 0;
-        int hi_count = 0;
-
-        while ((c = fgetc(g_wav)) != EOF && fast_sample_state(c) != 0) {}
-        if (c == EOF)
+        int tot = fast_read_cell(phase);
+        if (tot < 0)
             return 0;
-        while (fast_sample_state(c) == 0) {
-            lo_count++;
-            c = fgetc(g_wav);
-            if (c == EOF)
-                return 0;
-        }
-        while (fast_sample_state(c) != 0) {
-            hi_count++;
-            c = fgetc(g_wav);
-            if (c == EOF)
-                break;
-        }
-        if (c != EOF)
-            ungetc(c, g_wav);
-
-        val = (uint8_t)((val << 1) | ((lo_count + hi_count) >= 6 ? 1u : 0u));
+        val = (uint8_t)((val << 1) | (tot >= 6 ? 1u : 0u));
     }
 
     *value = val;
@@ -664,55 +680,28 @@ static int read_fast_byte(uint8_t *value)
 }
 
 /*
- * Scans the remainder of g_wav looking for a 2018AD speedload block.
+ * Scans the remainder of g_wav looking for a 2018AD speedload block with the given cell phase.
  * Sync pattern: >= 60 consecutive short cycles (0) followed by 1 long cycle (1).
  * Then reads the five-byte header, payload, and two-byte standard checksum.
- * Returns 1 on success, 0 if no fast block is found, or -1 for a truncated block.
+ * Returns 1 on success, 0 if no plausible block is found (including a wrong-phase decode whose
+ * header is not file type F0/F1 or does not fit in 64K), or -1 for a truncated plausible block.
  */
-static int decode_fast_speedload_block(FastBlock *out_block)
+static int decode_fast_phase(FastBlock *out_block, int phase)
 {
     long start_pos = ftell(g_wav);
-    int c;
+    int tot;
     int short_streak = 0;
     int sync_found = 0;
+    int plausible = 0;
     uint8_t *payload_buf = NULL;
 
     out_block->payload = NULL;
 
-    /* Cycle detector state */
-    while ((c = fgetc(g_wav)) != EOF) {
-        int lo_count = 0;
-        int hi_count = 0;
-
-        /* Advance to low sample */
-        while (fast_sample_state(c) != 0) {
-            c = fgetc(g_wav);
-            if (c == EOF) goto fail;
-        }
-
-        /* Count low samples */
-        while (fast_sample_state(c) == 0) {
-            lo_count++;
-            c = fgetc(g_wav);
-            if (c == EOF) goto fail;
-        }
-
-        /* Count high samples (c is already high) */
-        while (fast_sample_state(c) != 0) {
-            hi_count++;
-            c = fgetc(g_wav);
-            if (c == EOF) break;
-        }
-        if (c != EOF) {
-            ungetc(c, g_wav);
-        }
-
-        int cycle_len = lo_count + hi_count;
-
-        /* Classify cycle: nominal short is 4 samples (range 2..5), long is 8 (range 6..11) */
-        if (cycle_len >= 2 && cycle_len <= 5) {
+    while ((tot = fast_read_cell(phase)) >= 0) {
+        /* nominal short is 4 samples (range 2..5), long is 8 (range 6..11) */
+        if (tot >= 2 && tot <= 5) {
             short_streak++;
-        } else if (cycle_len >= 6 && cycle_len <= 11) {
+        } else if (tot >= 6 && tot <= 11) {
             if (short_streak >= 60) {
                 sync_found = 1;
                 break;
@@ -737,7 +726,7 @@ static int decode_fast_speedload_block(FastBlock *out_block)
         uint16_t payload_len;
 
         for (b_idx = 0; b_idx < 5; b_idx++) {
-            if (!read_fast_byte(&hdr_bytes[b_idx]))
+            if (!read_fast_byte(phase, &hdr_bytes[b_idx]))
                 goto fail;
         }
 
@@ -746,16 +735,21 @@ static int decode_fast_speedload_block(FastBlock *out_block)
         payload_len           = (uint16_t)(hdr_bytes[3] | (hdr_bytes[4] << 8));
         out_block->data_size  = payload_len;
 
-        payload_buf = (uint8_t *)malloc((size_t)payload_len);
+        if ((out_block->file_type != 0xF0u && out_block->file_type != 0xF1u) ||
+            (unsigned long)out_block->start_addr + (unsigned long)payload_len > 0x10000UL)
+            goto fail;
+        plausible = 1;
+
+        payload_buf = (uint8_t *)malloc(payload_len ? (size_t)payload_len : 1u);
         if (!payload_buf) goto fail;
 
         for (b_idx = 0; b_idx < (int)payload_len; b_idx++)
-            if (!read_fast_byte(&payload_buf[b_idx]))
+            if (!read_fast_byte(phase, &payload_buf[b_idx]))
                 goto fail;
 
         {
             uint8_t checksum_lo, checksum_hi;
-            if (!read_fast_byte(&checksum_lo) || !read_fast_byte(&checksum_hi))
+            if (!read_fast_byte(phase, &checksum_lo) || !read_fast_byte(phase, &checksum_hi))
                 goto fail;
             out_block->checksum = (uint16_t)((unsigned)checksum_lo |
                                              ((unsigned)checksum_hi << 8u));
@@ -768,7 +762,24 @@ fail:
     free(payload_buf);
     if (start_pos >= 0)
         fseek(g_wav, start_pos, SEEK_SET);
-    return sync_found ? -1 : 0;
+    return plausible ? -1 : 0;
+}
+
+/*
+ * Tries the inverted phase (vz2wav default) first, then the original phase.
+ * Returns 1 on success, 0 if no fast block is found, or -1 for a truncated block.
+ */
+static int decode_fast_speedload_block(FastBlock *out_block)
+{
+    int r1 = decode_fast_phase(out_block, 1);
+    int r0;
+
+    if (r1 > 0)
+        return 1;
+    r0 = decode_fast_phase(out_block, 0);
+    if (r0 > 0)
+        return 1;
+    return (r1 < 0 || r0 < 0) ? -1 : 0;
 }
 
 static uint16_t read_u16_le(void)

@@ -39,7 +39,8 @@
 
 ## Signal path options
 
-- Add optional waveform inversion controls for encode/decode paths.
+- Add optional waveform inversion controls for the standard-speed encode/decode paths (the fast block phase is done: `--fast-invert` default / `--fast-normal`).
+- Hardware-test the normal (non-debug) receiver in the inverted phase, `--fast-normal`, `--fast-vram` and relocated placement on real VZ200 hardware (only `--fast-debug` in the inverted phase has been verified there; the rest is covered by simulation).
 - [x] Add optional square-wave and sine-wave output profiles in `vz2wav`
   (`--waveform <dos|square|sine>`, `--square`, `--sine`) for compatibility
   experiments on difficult analog/emulator setups.

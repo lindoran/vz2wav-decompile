@@ -1,3 +1,15 @@
+V2.0 (fast loader phase + debug build)
+feat(fast): inverted fast-block phase default, --fast-normal, --fast-debug, wav2vz phase auto-detect
+
+- vz2wav: the fast block's cell phase is now selectable. The default is inverted (high half first),
+  verified on real VZ200 hardware; --fast-normal restores the original phase. Applies to every fast
+  mode (--fast, --fast-vram, --fast-flat-ram, --fast-debug, --fast-raw). With --fast-normal the output
+  is byte-identical to the previous build.
+- vz2wav: new --fast-debug: a verbose, relocatable receiver with an on-screen diagnostic panel, the same
+  trailing-checksum test, and a pulse threshold calibrated from the tape. Source/generator in fast_stub/.
+- wav2vz: the fast decoder measures cells edge-to-same-edge and tries both phases, accepting a block only
+  if its header is plausible; the checksum and truncated-block handling is unchanged.
+
 V1.0
 feat(toolchain): expand VZ CLI suite, packaging, docs, and reliability hardening
 
