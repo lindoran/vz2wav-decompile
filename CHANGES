@@ -1,3 +1,14 @@
+V2.3 (fast phase default flipped)
+fix(fast): normal fast-block phase is the default again; --fast-invert kept as an option
+
+- The inversion turned out to be specific to the homebrew (RC39/HB200) computer. A normal VZ200 loads the
+  normal (low half first) phase, so that is the default again. --fast-invert (high half first) stays as a
+  supported feature for machines that invert the tape signal; --fast-normal is still accepted.
+- Applies to every fast mode (--fast, --fast-vram, --fast-flat-ram, --fast-debug, --fast-raw). Output with
+  --fast-invert is byte-identical to the V2.0-V2.2 default; output without a phase option is now
+  byte-identical to V2.0-V2.2 with --fast-normal.
+- wav2vz: still decodes either phase automatically; it now tries the normal phase first.
+
 V2.0 (fast loader phase + debug build)
 feat(fast): inverted fast-block phase default, --fast-normal, --fast-debug, wav2vz phase auto-detect
 

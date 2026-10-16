@@ -75,9 +75,10 @@
 #define MAX_GAIN_PERCENT           300
 
 static int g_output_gain_percent = DEFAULT_GAIN_PERCENT;
-/* Fast block cell phase. 1 (default) = high half first, verified on real VZ200 hardware;
- * 0 = low half first (original phase, matches the emulators tried so far). */
-static int g_fast_invert = 1;
+/* Fast block cell phase. 0 (default) = low half first (original phase; stock VZ200 and
+ * emulators). 1 = high half first (--fast-invert), needed by homebrew machines such as the
+ * RC39/HB200 clone whose cassette input inverts the signal. */
+static int g_fast_invert = 0;
 
 static int memory_range_overlaps(uint16_t load_addr, uint32_t length,
                                  uint32_t range_start, uint32_t range_end)
@@ -687,8 +688,9 @@ static void print_usage(void)
         "  --fast-raw    Emit raw 2018AD speedload audio block without bootstrap stub.\n"
         "  --fast-debug  Like --fast, but the loader paints a live diagnostic panel on screen (sync\n"
         "                counts, received header, checksum). Combines with --fast-vram/--fast-flat-ram.\n"
-        "  --fast-invert Fast block phase: high half first (DEFAULT; verified on real VZ200 hardware).\n"
-        "  --fast-normal Fast block phase: low half first (original phase). Applies to every fast mode.\n"
+        "  --fast-invert Fast block phase: high half first, for machines whose tape input inverts the\n"
+        "                signal (e.g. the RC39/HB200 homebrew). Not the default. Applies to every fast mode.\n"
+        "  --fast-normal Fast block phase: low half first (DEFAULT; stock VZ200, emulators).\n"
         "  --compat,-c   Write a malformed WAV matching the original DOS program\n"
         "                (RIFF and data size fields use raw DOS stack garbage).\n"
         "  --artifact,-a Write the exact Borland C uninitialized stack bytes into\n"
@@ -778,9 +780,9 @@ int main(int argc, char *argv[])
             fast_debug = 1;
         }
         else if (strcmp(argv[i], "--fast-invert") == 0)
-            g_fast_invert = 1;   /* default; accepted for explicitness */
+            g_fast_invert = 1;
         else if (strcmp(argv[i], "--fast-normal") == 0)
-            g_fast_invert = 0;
+            g_fast_invert = 0;   /* default; accepted for explicitness */
         else if (strcmp(argv[i], "--gain") == 0 || strcmp(argv[i], "-g") == 0) {
             if (i + 1 >= argc || parse_gain_percent(argv[++i], &g_output_gain_percent) != 0) {
                 fprintf(stderr, "vz2wav: invalid --gain value\n");
@@ -981,7 +983,7 @@ usage:
     }
     printf("  Checksum  : 0x%02" PRIX8 "%02" PRIX8 "\n", cksum_hi, cksum_lo);
     if (fast_mode != 0)
-        printf("  Fast phase: %s\n", g_fast_invert ? "inverted (default)" : "normal (--fast-normal)");
+        printf("  Fast phase: %s\n", g_fast_invert ? "inverted (--fast-invert)" : "normal (default)");
     printf("\n");
 
     /*

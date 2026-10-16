@@ -631,7 +631,7 @@ static int fast_sample_state(int c)
 /*
  * Reads one speedload cell and returns its total length in samples (-1 on EOF).
  * phase 0: low half first, then high half (original encoder phase).
- * phase 1: high half first, then low half (inverted phase, vz2wav default).
+ * phase 1: high half first, then low half (inverted phase, vz2wav --fast-invert).
  * A cell is always measured from one edge to the next edge of the same type, so adjacent
  * half-cells are never combined; decoding with the wrong phase yields garbage, which
  * decode_fast_phase() rejects through its header plausibility check.
@@ -766,18 +766,18 @@ fail:
 }
 
 /*
- * Tries the inverted phase (vz2wav default) first, then the original phase.
+ * Tries the original phase (vz2wav default) first, then the inverted phase (--fast-invert).
  * Returns 1 on success, 0 if no fast block is found, or -1 for a truncated block.
  */
 static int decode_fast_speedload_block(FastBlock *out_block)
 {
-    int r1 = decode_fast_phase(out_block, 1);
-    int r0;
+    int r0 = decode_fast_phase(out_block, 0);
+    int r1;
 
-    if (r1 > 0)
-        return 1;
-    r0 = decode_fast_phase(out_block, 0);
     if (r0 > 0)
+        return 1;
+    r1 = decode_fast_phase(out_block, 1);
+    if (r1 > 0)
         return 1;
     return (r1 < 0 || r0 < 0) ? -1 : 0;
 }

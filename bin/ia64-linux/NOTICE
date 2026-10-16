@@ -1,0 +1,30 @@
+VZ2WAV / WAV2VZ Reconstruction Project - Licensing Notice
+
+Repository-default license for original contributions:
+- UNLICENSE (public domain dedication), see `UNLICENSE`.
+
+Important scope limits:
+- The UNLICENSE dedication applies only to rights held by this project's
+  contributors.
+- It does not relicense third-party code, data, trademarks, or any other
+  external rights.
+
+Third-party / inherited components:
+- `text2bas.c` and `AtariST_Version_SRC/` originate from Juergen
+  Buchmueller's Text To BASic converter lineage.
+- These components retain their own provenance and licensing status as
+  documented in `TEXT2BAS.md`.
+
+Reverse-engineering provenance:
+- Some behavior and constants in this repository were reconstructed by
+  analysis of historical binaries and sample artifacts.
+- In examined original binaries/artifacts, no explicit license notice or
+  author attribution was found in embedded strings/metadata.
+- Absence of a license notice or attribution in those artifacts is not, by
+  itself, a grant of rights.
+- This project makes no claim of ownership over third-party rights that
+  may exist in original software or assets.
+
+Compliance reminder:
+- Users and redistributors are responsible for ensuring legal compliance in
+  their jurisdiction for reverse-engineering and redistribution activities.

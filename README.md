@@ -107,11 +107,12 @@ Options:
   Emit raw 2018AD speedload audio block without the standard bootstrap stub.
   Useful for custom loaders and demos that already have the fast receiver in RAM.
 
-- `--fast-invert` (default), `--fast-normal`
-  Phase of the fast block's bit cells. The default (`--fast-invert`, high half of
-  each cell first) is the phase that loaded on real VZ200 hardware; the original
-  phase (`--fast-normal`, low half first) loaded in emulators and is kept for
-  systems that need it. The wrong phase is not subtle: the receiver synchronizes
+- `--fast-normal` (default), `--fast-invert`
+  Phase of the fast block's bit cells. The default (`--fast-normal`, low half of
+  each cell first) loads on a stock VZ200 and in emulators. `--fast-invert` (high
+  half first) is for machines whose cassette input inverts the signal, such as the
+  RC39/HB200 homebrew; it is a supported feature but not the default. The wrong
+  phase is not subtle: the receiver synchronizes
   but decodes a garbage header (typically a wild start address and length) and,
   with interrupts off, stops responding to BREAK. Applies to `--fast`,
   `--fast-vram`, `--fast-flat-ram`, `--fast-debug` and `--fast-raw`; `wav2vz`
@@ -205,8 +206,8 @@ Options:
   self-booting hybrid WAVs, the filename is read from the standard VZ
   preamble; raw fast-load WAVs do not contain a filename. Fast-load WAVs
   without the checksum trailer are treated as incomplete.
-  Fast blocks of either cell phase are accepted (the inverted phase is tried first,
-  then the original); a decode is only accepted when its header is plausible
+  Fast blocks of either cell phase are accepted (the normal phase is tried first,
+  then the inverted); a decode is only accepted when its header is plausible
   (file type `F0`/`F1`, start+length within 64K).
 
 - `--analyze`, `-a`
